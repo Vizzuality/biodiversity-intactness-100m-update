@@ -4,10 +4,45 @@ version = "0.1.0"
 description = "Update Biodiversity Intactness Index data processing"
 requires-python = ">=3.11"
 dependencies = [
-    "jupyter",
     "requests",
-    "pystac-client",
-    "planetary-computer",
+    "numpy",
+    "scipy",
     "rasterio",
     "geopandas",
+    "pyogrio",
+    "pyarrow",
+    "shapely",
+    "pystac-client",
+    "planetary-computer",
+    "boto3",
+]
+
+[project.optional-dependencies]
+# Processing/model deps (parts 3-4). Kept optional so the staging image stays lean.
+process = [
+    "cog_worker",
+    "mahotas",
+    "rio-tiler",
+]
+dev = [
+    "jupyter",
+    "pytest",
+    "rio-cogeo",  # cog_validate, used only by the test suite
+]
+
+[project.scripts]
+bii-stage = "bii.cli:stage_main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bii"]
+# Ship the vendored Geofabrik leaf-region manifest used by staging/roads.py.
+artifacts = ["src/bii/staging/data/*.geojson"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that hit the network / real data sources (deselect with '-m \"not integration\"')",
 ]
