@@ -1,0 +1,13 @@
+[project]
+name = "update-bii"
+version = "0.1.0"
+description = "Update Biodiversity Intactness Index data processing"
+requires-python = ">=3.11"
+dependencies = [
+    "jupyter",
+    "requests",
+    "pystac-client",
+    "planetary-computer",
+    "rasterio",
+    "geopandas",
+]
