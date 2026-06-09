@@ -1,16 +1,16 @@
 """Footprint index: build + query. Replaces the original private STAC API.
 
 Each staged asset has a GeoParquet index of ``{geometry (EPSG:4326), uri}`` rows — one row
-per staged COG tile. :func:`lookup` answers "which tiles overlap this chunk?" for the
-processing worker, with two backends behind one interface:
-
-* **staged assets** — spatial query the cached GeoParquet via geopandas ``.sindex``.
-* **landcover** — a live STAC search against the Impact Observatory ``io-10m-annual-lulc``
-  collection (never staged; covers 2017-2024, AWS-hosted).
+per staged COG tile (or, for ``landcover``, one row per in-place IO STAC item href). Every
+asset is queried through one backend: a spatial query of the cached GeoParquet via geopandas
+``.sindex``. :func:`lookup` answers "which tiles overlap this chunk?" for the processing
+worker.
 
 Staging writes the index: each unit registers a one-row *part* (so parallel Batch jobs don't
 race on a single file); :func:`consolidate` merges parts into the asset index. :func:`build_index`
-is the all-at-once path used locally and by the orchestrator.
+is the all-at-once path used locally and by the orchestrator (and by
+:mod:`bii.staging.iolulc`, which pre-walks the IO STAC so landcover joins the staged backend
+instead of a live per-chunk search).
 """
 
 from __future__ import annotations
@@ -28,11 +28,6 @@ from . import config
 from .staging import cog
 
 INDEX_CRS = "EPSG:4326"
-
-# Impact Observatory LULC (landcover) — read live from this STAC, never staged. Covers
-# 2017-2024, AWS-hosted.
-LULC_STAC_URL = "https://api.impactobservatory.com/stac-aws"
-LULC_COLLECTION = "io-10m-annual-lulc"
 
 
 # --------------------------------------------------------------------------------------
@@ -176,9 +171,8 @@ def consolidate(asset: str, year: int | None = None) -> str:
 def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | None = None) -> list[str]:
     """Return the source URIs whose footprints intersect ``bounds`` (EPSG:4326).
 
-    ``landcover`` is resolved live from the IO STAC; everything else from its GeoParquet."""
-    if asset == "landcover":
-        return _lookup_lulc(bounds, year)
+    All assets — including ``landcover`` (staged in place by :mod:`bii.staging.iolulc`) —
+    resolve from their GeoParquet index."""
     return _lookup_staged(asset, bounds, year)
 
 
@@ -190,19 +184,3 @@ def _lookup_staged(asset: str, bounds, year: int | None) -> list[str]:
     query = box(*bounds)
     idx = list(gdf.sindex.query(query, predicate="intersects"))
     return gdf.iloc[idx]["uri"].tolist()
-
-
-def _lookup_lulc(bounds, year: int | None) -> list[str]:
-    import pystac_client
-
-    client = pystac_client.Client.open(LULC_STAC_URL)
-    search_kw = dict(collections=[LULC_COLLECTION], bbox=list(bounds), limit=500)
-    if year is not None:
-        search_kw["datetime"] = f"{year}-01-01/{year}-12-31"
-    hrefs: list[str] = []
-    for item in client.search(**search_kw).items():
-        for key, asset in item.assets.items():
-            mt = (asset.media_type or "").lower()
-            if "tif" in mt or key in ("data", "supercell"):
-                hrefs.append(asset.href)
-    return hrefs

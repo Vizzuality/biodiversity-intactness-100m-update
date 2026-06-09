@@ -12,6 +12,7 @@ COG's footprint and packs ``{asset, uri, footprint, year, index_part}``.
 Raster streaming: hansen, worldpop, nightlights, travel_time, fml.
 Vector rasterization (ephemeral disk): sdpt (a forestManagement provider alongside fml),
 roads (highway mask; requires osmctools, e.g. in Dockerfile.roads).
+Index-only (no pixels moved): iolulc (landcover) records IO STAC hrefs in place.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 from . import (
     forest_management,
     hansen,
+    iolulc,
     nightlights,
     roads,
     sdpt,
@@ -34,12 +36,14 @@ MODULES = {
     "fml": forest_management,
     "sdpt": sdpt,
     "roads": roads,
+    "iolulc": iolulc,
 }
 
 __all__ = [
     "MODULES",
     "forest_management",
     "hansen",
+    "iolulc",
     "nightlights",
     "roads",
     "sdpt",
