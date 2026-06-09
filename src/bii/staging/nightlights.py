@@ -17,8 +17,8 @@ import re
 
 import requests
 
-from .. import config
-from . import _base, cog
+from .. import config, tile_index
+from . import cog
 
 ASSET = "nightlights"
 
@@ -81,4 +81,4 @@ def stage_unit(
     footprint = cog.translate_to_cog(
         src, dst, resampling="average", overwrite=overwrite, extra_env=extra_env
     )
-    return _base.finalize(ASSET, dst, footprint, year, register_index)
+    return tile_index.finalize(ASSET, dst, footprint, year, register_index)

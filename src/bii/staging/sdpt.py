@@ -16,8 +16,8 @@ region with no polygons in the requested window is skipped, keeping the index le
 
 from __future__ import annotations
 
-from .. import config
-from . import _base, cog
+from .. import config, tile_index
+from . import cog
 
 ASSET = "forestManagement"
 PROVIDER = "sdpt"
@@ -92,4 +92,4 @@ def stage_unit(
     )
     if footprint is None:
         return None
-    return _base.finalize(ASSET, dst, footprint, None, register_index)
+    return tile_index.finalize(ASSET, dst, footprint, None, register_index)

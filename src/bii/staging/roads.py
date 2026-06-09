@@ -29,8 +29,8 @@ import tempfile
 
 import geopandas as gpd
 
-from .. import config
-from . import _base, cog
+from .. import config, tile_index
+from . import cog
 
 ASSET = "roads"
 
@@ -168,7 +168,7 @@ def stage_unit(
 ) -> dict | None:
     dst = _dst(unit["id"])
     if not overwrite and cog.exists(dst):
-        return _base.finalize(ASSET, dst, cog.footprint_4326(dst), None, register_index)
+        return tile_index.finalize(ASSET, dst, cog.footprint_4326(dst), None, register_index)
 
     # A local pbf (tests / pre-staged extract) is read in place; a URL is fetched to disk first
     # (the OSM driver and osmctools both need random access a /vsicurl stream can't serve well).
@@ -203,4 +203,4 @@ def stage_unit(
 
     if footprint is None:
         return None
-    return _base.finalize(ASSET, dst, footprint, None, register_index)
+    return tile_index.finalize(ASSET, dst, footprint, None, register_index)

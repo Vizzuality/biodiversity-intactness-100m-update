@@ -7,8 +7,8 @@ Single-epoch: one snapshot reused across all years. Continuous minutes, so overv
 
 from __future__ import annotations
 
-from .. import config
-from . import _base, cog
+from .. import config, tile_index
+from . import cog
 
 ASSET = "accessibility"
 # Oxford MAP travel time to cities (2015 accessibility surface). Single epoch.
@@ -39,4 +39,4 @@ def stage_unit(
     footprint = cog.translate_to_cog(
         unit["url"], dst, resampling="average", overwrite=overwrite
     )
-    return _base.finalize(ASSET, dst, footprint, None, register_index)
+    return tile_index.finalize(ASSET, dst, footprint, None, register_index)

@@ -129,29 +129,6 @@ def _vsi(uri: str) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# COG creation options (GDAL "COG" driver)
-# --------------------------------------------------------------------------------------
-def _cog_options(resampling: str, dtype: str) -> dict:
-    """Creation options for the GDAL ``COG`` driver: ZSTD compression with a dtype-correct
-    predictor, 512px tiles, and overviews built with ``resampling`` (``average`` for
-    continuous data, ``nearest`` for categorical).
-
-    The predictor decorrelates neighbouring samples before compression: 3 (floating-point)
-    for float bands, 2 (horizontal) for integers. Picking it by dtype matters — predictor 2
-    on raw float bytes can *inflate* the output, so the COG driver's dtype-blind ``YES`` is
-    not safe here.
-    """
-    predictor = 3 if str(dtype).startswith(("float", "complex")) else 2
-    return dict(
-        driver="COG",
-        compress="ZSTD",
-        predictor=predictor,
-        blocksize=512,
-        overview_resampling=resampling,
-    )
-
-
-# --------------------------------------------------------------------------------------
 # Writers
 # --------------------------------------------------------------------------------------
 def fetch(url: str, headers: dict | None = None, suffix: str = ".tif") -> str:
@@ -180,48 +157,43 @@ def translate_to_cog(
     resampling: str = "average",
     overwrite: bool = False,
     extra_env: dict | None = None,
-    download: bool = False,
 ) -> tuple[float, float, float, float]:
     """Stream-convert an existing raster ``src`` into a COG at ``dst``.
 
     ``src`` may be a local path, an ``http(s)://`` URL (read via ``/vsicurl``), or any GDAL
-    VSI path (``/vsigzip/...``, ``/vsizip/...``). Set ``download=True`` to fetch the source to
-    a temp file first (for hosts that don't support HTTP range requests). Returns the COG
+    VSI path (``/vsigzip/...``, ``/vsizip/...``). For hosts that don't support HTTP range
+    requests, ``fetch`` the source to a temp file first and pass that path. Returns the COG
     footprint in EPSG:4326.
     """
     if not overwrite and exists(dst):
         return footprint_4326(dst)
 
-    fetched = None
-    if download and src.startswith(("http://", "https://")):
-        fetched = fetch(src)
-        src_path = fetched
-    else:
-        src_path = _vsi(src)
+    src_path = _vsi(src)
     env = dict(READ_ENV)
     if extra_env:
         env.update(extra_env)
 
-    try:
-        with rio.Env(**env), rio.open(src_path) as s, _staged_local_path(dst) as local:
-            rio.shutil.copy(s, local, **_cog_options(resampling, s.dtypes[0]))
-    finally:
-        if fetched:
-            os.path.exists(fetched) and os.remove(fetched)
+    with rio.Env(**env), rio.open(src_path) as s, _staged_local_path(dst) as local:
+        # Predictor decorrelates neighbouring samples before ZSTD: 3 (floating-point) for
+        # float bands, 2 (horizontal) for ints. Predictor 2 on raw float bytes can *inflate*
+        # the output, so the COG driver's dtype-blind ``YES`` is not safe here.
+        predictor = 3 if s.dtypes[0].startswith(("float", "complex")) else 2
+        rio.shutil.copy(
+            s, local, driver="COG", compress="ZSTD", predictor=predictor,
+            blocksize=512, overview_resampling=resampling,
+        )
     return footprint_4326(dst)
 
 
-def grid_transform(
+def snap_grid(
     bounds: tuple[float, float, float, float], res: float | None = None
-) -> tuple[object, int, int, tuple[float, float, float, float]]:
+) -> tuple[int, int, tuple[float, float, float, float]]:
     """Snap ``bounds`` (EPSG:4326 west, south, east, north) outward to the global BII grid and
-    return ``(transform, width, height, snapped_bounds)``.
+    return ``(width, height, snapped_bounds)``.
 
     Snapping to multiples of ``res`` keeps every staged tile pixel-aligned with the processing
     grid and with neighbouring tiles, so cog_worker can mosaic overlapping tiles cleanly.
     """
-    from affine import Affine
-
     res = res or config.SCALE_DEG
     w, s, e, n = bounds
     w = np.floor(w / res) * res
@@ -230,8 +202,7 @@ def grid_transform(
     n = np.ceil(n / res) * res
     width = max(1, int(round((e - w) / res)))
     height = max(1, int(round((n - s) / res)))
-    transform = Affine.translation(w, n) * Affine.scale(res, -res)
-    return transform, width, height, (w, s, e, n)
+    return width, height, (w, s, e, n)
 
 
 # GDAL output-type names for ``gdal_rasterize -ot``, keyed by numpy dtype string.
@@ -239,24 +210,6 @@ _GDAL_OT = {
     "uint8": "Byte", "int8": "Int8", "uint16": "UInt16", "int16": "Int16",
     "uint32": "UInt32", "int32": "Int32", "float32": "Float32", "float64": "Float64",
 }
-
-
-def _require_gdal_rasterize() -> None:
-    if shutil.which("gdal_rasterize") is None:
-        raise RuntimeError(
-            "vector rasterization requires the gdal_rasterize CLI but it is not on PATH; "
-            "install GDAL (the gdal-bin package)."
-        )
-
-
-def _raster_is_empty(path: str, fill: int) -> bool:
-    """Whether every pixel of ``path`` equals ``fill``. Reads block-by-block so a huge burn
-    never lands in memory at once, and short-circuits on the first non-fill pixel."""
-    with rio.Env(**READ_ENV), rio.open(path) as s:
-        for _, win in s.block_windows(1):
-            if (s.read(1, window=win) != fill).any():
-                return False
-    return True
 
 
 def rasterize_to_cog(
@@ -287,9 +240,11 @@ def rasterize_to_cog(
     ``bounds`` (EPSG:4326 west, south, east, north) is snapped outward to the BII grid for the
     output extent; pass ``None`` to use the source layer's full extent (read from metadata only,
     no geometry load). ``all_touched=True`` keeps thin features (single-pixel roads) from
-    dropping out. ``where`` is an OGR attribute filter applied during the burn. Returns the
-    snapped footprint, or ``None`` if the burn is empty (and ``skip_empty``) — keeping the index
-    lean.
+    dropping out. ``where`` is an OGR attribute filter applied to both the emptiness pre-check
+    and the burn. With ``skip_empty`` we test for a matching feature in the output window
+    *before* burning (a bbox-level OGR filter, no geometry into Python) and return ``None`` when
+    none overlaps — avoiding a full grid burn + read-back for the many empty tiles, and keeping
+    the index lean.
 
     The source must already be in EPSG:4326 (the BII grid CRS) — ``gdal_rasterize`` burns vector
     coordinates onto the ``-te`` grid as-is and does not reproject. Both callers satisfy this:
@@ -297,20 +252,36 @@ def rasterize_to_cog(
     """
     if not overwrite and exists(dst):
         return footprint_4326(dst)
-    _require_gdal_rasterize()
+    if shutil.which("gdal_rasterize") is None:
+        raise RuntimeError(
+            "vector rasterization requires the gdal_rasterize CLI but it is not on PATH; "
+            "install GDAL (the gdal-bin package)."
+        )
     env = dict(READ_ENV, **(extra_env or {}))
 
-    if bounds is None:
-        import pyogrio
+    import pyogrio
 
+    if bounds is None:
         with rio.Env(**env):
             info = pyogrio.read_info(src, layer=layer)
         if not info.get("features") or info.get("total_bounds") is None:
             return None  # empty layer -> nothing to burn
         bounds = tuple(info["total_bounds"])
 
-    _, width, height, snapped = grid_transform(bounds, res)
+    width, height, snapped = snap_grid(bounds, res)
     w, s, e, n = (float(x) for x in snapped)
+
+    # No feature's bbox in the window -> the burn would be all-fill, so skip it entirely.
+    # ``max_features=1`` stops after the first match, so this reads at most one feature (not the
+    # whole layer). ``read_geometry=True`` is required: with it off, GDAL's GeoJSON driver skips
+    # the bbox spatial filter for attribute-less features.
+    if skip_empty:
+        with rio.Env(**env):
+            present = pyogrio.read_dataframe(
+                src, layer=layer, where=where, bbox=(w, s, e, n), max_features=1,
+            )
+        if len(present) == 0:
+            return None
 
     cmd = ["gdal_rasterize"]
     for k, v in env.items():
@@ -339,8 +310,6 @@ def rasterize_to_cog(
             raise RuntimeError(
                 f"gdal_rasterize failed ({proc.returncode}): {proc.stderr.strip()}"
             )
-        if skip_empty and _raster_is_empty(tmp_tif, fill):
-            return None
         return translate_to_cog(
             tmp_tif, dst, resampling="nearest", overwrite=overwrite, extra_env=extra_env
         )

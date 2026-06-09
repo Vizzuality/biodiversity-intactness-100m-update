@@ -107,13 +107,12 @@ def test_lookup_missing_index_returns_empty(local_staged):
 # --------------------------------------------------------------------------------------
 # Vector rasterization (gdal_rasterize-backed helper used by sdpt + roads)
 # --------------------------------------------------------------------------------------
-def test_grid_transform_snaps_to_bii_grid():
+def test_snap_grid_snaps_to_bii_grid():
     res = config.SCALE_DEG
-    transform, w, h, snapped = cog.grid_transform((10.3, 50.1, 10.7, 50.6))
-    # Origin snaps outward to a grid multiple; pixel size is the BII scale.
-    assert transform.a == pytest.approx(res)
-    assert transform.e == pytest.approx(-res)
+    w, h, snapped = cog.snap_grid((10.3, 50.1, 10.7, 50.6))
+    # Origin snaps outward to a grid multiple; width/height match the snapped extent.
     assert (snapped[0] / res) == pytest.approx(round(snapped[0] / res))
+    assert (snapped[1] / res) == pytest.approx(round(snapped[1] / res))
     assert w == round((snapped[2] - snapped[0]) / res)
     assert h == round((snapped[3] - snapped[1]) / res)
 
@@ -148,6 +147,17 @@ def test_rasterize_to_cog_polygon_and_line(local_staged, tmp_path):
 def test_rasterize_to_cog_empty_is_skipped(local_staged, tmp_path):
     src = _write_geojson(tmp_path / "empty.geojson", [])
     dst = config.staged_uri("test", "empty.tif")
+    assert cog.rasterize_to_cog(src, dst, (0.0, 0.0, 0.2, 0.2)) is None
+    assert not cog.exists(dst)
+
+
+def test_rasterize_to_cog_window_without_features_is_skipped(local_staged, tmp_path):
+    # The layer has a feature, but none falls in the requested window -> skipped before burning
+    # (no gdal_rasterize needed: the pre-check returns None).
+    poly = {"type": "Polygon",
+            "coordinates": [[[10.1, 50.1], [10.4, 50.1], [10.4, 50.4], [10.1, 50.4], [10.1, 50.1]]]}
+    src = _write_geojson(tmp_path / "elsewhere.geojson", [poly])
+    dst = config.staged_uri("test", "elsewhere.tif")
     assert cog.rasterize_to_cog(src, dst, (0.0, 0.0, 0.2, 0.2)) is None
     assert not cog.exists(dst)
 

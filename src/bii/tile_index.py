@@ -142,6 +142,21 @@ def register(asset: str, uri: str, footprint, year: int | None = None) -> str:
     return part
 
 
+def finalize(asset: str, dst: str, footprint, year: int | None, register_index: bool) -> dict:
+    """Register the staged COG's footprint (as an index part) and return the staging result.
+
+    The result dict ``{asset, uri, footprint, year, index_part}`` is the shape every
+    ``stage_unit`` returns (see :mod:`bii.staging`)."""
+    part = register(asset, dst, footprint, year) if register_index else None
+    return {
+        "asset": asset,
+        "uri": dst,
+        "footprint": list(footprint),
+        "year": year,
+        "index_part": part,
+    }
+
+
 def consolidate(asset: str, year: int | None = None) -> str:
     """Merge all registered parts into the asset index GeoParquet."""
     parts = [p for p in _list(_parts_prefix(asset, year)) if p.endswith(".parquet")]

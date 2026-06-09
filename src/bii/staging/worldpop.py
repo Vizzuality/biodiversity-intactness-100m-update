@@ -6,10 +6,12 @@ overviews use ``average``; the source nodata is preserved by the translate.
 
 from __future__ import annotations
 
-from rasterio.errors import RasterioIOError
+import os
 
-from .. import config
-from . import _base, cog
+import requests
+
+from .. import config, tile_index
+from . import cog
 
 ASSET = "population"
 
@@ -59,12 +61,18 @@ def stage_unit(
     **_,
 ) -> dict | None:
     dst = _dst(unit["iso3"], unit["year"])
+    if not overwrite and cog.exists(dst):
+        return tile_index.finalize(ASSET, dst, cog.footprint_4326(dst), unit["year"], register_index)
+
+    # WorldPop's host has no HTTP range support, so fetch the GeoTIFF to disk before re-COG'ing.
     try:
-        footprint = cog.translate_to_cog(
-            unit["url"], dst, resampling="average", overwrite=overwrite, download=True
-        )
-    except RasterioIOError:
+        local = cog.fetch(unit["url"])
+    except requests.HTTPError:
         if missing_ok:
             return None
         raise
-    return _base.finalize(ASSET, dst, footprint, unit["year"], register_index)
+    try:
+        footprint = cog.translate_to_cog(local, dst, resampling="average", overwrite=overwrite)
+    finally:
+        os.path.exists(local) and os.remove(local)
+    return tile_index.finalize(ASSET, dst, footprint, unit["year"], register_index)

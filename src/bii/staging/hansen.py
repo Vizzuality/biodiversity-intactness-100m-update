@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from rasterio.errors import RasterioIOError
 
-from .. import config
-from . import _base, cog
+from .. import config, tile_index
+from . import cog
 
 ASSET = "forestLoss"
 LAYER = "lossyear"
@@ -63,4 +63,4 @@ def stage_unit(
         if missing_ok:
             return None
         raise
-    return _base.finalize(ASSET, dst, footprint, None, register_index)
+    return tile_index.finalize(ASSET, dst, footprint, None, register_index)
