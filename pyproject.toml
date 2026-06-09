@@ -33,6 +33,7 @@ dev = [
 [project.scripts]
 bii-stage = "bii.cli:stage_main"
 bii-process = "bii.process:main"
+bii-run = "bii.orchestrate:main"
 
 [build-system]
 requires = ["hatchling"]

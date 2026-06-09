@@ -171,12 +171,7 @@ def consolidate(asset: str, year: int | None = None) -> str:
 def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | None = None) -> list[str]:
     """Return the source URIs whose footprints intersect ``bounds`` (EPSG:4326).
 
-    All assets — including ``landcover`` (staged in place by :mod:`bii.staging.iolulc`) —
-    resolve from their GeoParquet index."""
-    return _lookup_staged(asset, bounds, year)
-
-
-def _lookup_staged(asset: str, bounds, year: int | None) -> list[str]:
+    All assets — including resolve from their GeoParquet index."""
     uri = index_uri(asset, year)
     if not cog.exists(uri):
         return []
@@ -184,3 +179,16 @@ def _lookup_staged(asset: str, bounds, year: int | None) -> list[str]:
     query = box(*bounds)
     idx = list(gdf.sindex.query(query, predicate="intersects"))
     return gdf.iloc[idx]["uri"].tolist()
+
+
+def read_index(asset: str, year: int | None = None) -> gpd.GeoDataFrame | None:
+    """Return ``asset``'s footprint index as a GeoDataFrame, or ``None`` if it doesn't exist.
+
+    Unlike :func:`lookup` (one spatial query per call), this hands back the whole frame so a
+    caller — the orchestrator's ocean-drop coverage — can build one ``.sindex`` and reuse it
+    against thousands of chunks without re-reading the parquet each time.
+    """
+    uri = index_uri(asset, year)
+    if not cog.exists(uri):
+        return None
+    return _read_parquet(uri)
