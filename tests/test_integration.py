@@ -7,6 +7,7 @@ valid COG and the tile index can find it.
 * WorldPop — a *multipart* dataset; stage one whole (small) country.
 * SDPT     — a per-country GDB layer (vector); rasterize one small window + verify empty skip.
 * roads    — a Geofabrik region (vector); download a tiny extract, filter highways, rasterize.
+* iolulc   — landcover; index-only, walk the IO STAC for one year and query the index.
 """
 
 import shutil
@@ -17,7 +18,7 @@ import rasterio as rio
 from rio_cogeo.cogeo import cog_validate
 
 from bii import tile_index
-from bii.staging import roads, sdpt, worldpop
+from bii.staging import iolulc, roads, sdpt, worldpop
 
 pytestmark = pytest.mark.integration
 
@@ -67,6 +68,27 @@ def test_stage_sdpt_country_window_and_empty_skip(data_staged):
     mid = ((w + e) / 2, (s + n) / 2)
     hits = tile_index.lookup("forestManagement", (mid[0], mid[1], mid[0] + 0.01, mid[1] + 0.01))
     assert result["uri"] in hits
+
+
+def test_stage_iolulc_index(data_staged):
+    # Index-only: walk the IO STAC for one year, write the GeoParquet, then query it. No COG
+    # is produced — the index rows point at the original STAC item hrefs (read in place).
+    unit = {"id": "2020", "year": 2020}
+    result = iolulc.stage_unit(unit)
+
+    assert result is not None
+    assert result["asset"] == "landcover"
+    assert result["year"] == 2020
+    assert result["n_items"] > 0
+
+    # The Costa Rica test bounds should hit at least one indexed LULC item for 2020.
+    hits = tile_index.lookup("landcover", (-86, 9, -84, 11), year=2020)
+    assert hits, "expected landcover index to cover the Costa Rica test bounds"
+    assert all(isinstance(h, str) for h in hits)
+
+    # A bounds-disjoint year has its own index file; skip-if-exists returns without rewriting.
+    skipped = iolulc.stage_unit(unit)
+    assert skipped is not None and skipped.get("skipped") is True
 
 
 @pytest.mark.skipif(
