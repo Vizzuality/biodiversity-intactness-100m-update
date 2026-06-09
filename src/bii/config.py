@@ -27,6 +27,11 @@ AWS_REGION = "us-west-2"
 STAGED_ROOT = f"s3://{BUCKET}/{STAGED_PREFIX}"
 OUT_ROOT = f"s3://{BUCKET}/{OUT_PREFIX}"
 
+# Run id: the sub-prefix under the output root segregating one processing run's COGs
+# (``out/<run_id>/...``) and its ``chunks.jsonl`` manifest. Operational, not analysis config —
+# override per run via the ``BII_RUN_ID`` env var (see :func:`bii.process.default_run_id`).
+RUN_ID = "v1"
+
 
 def _join(root: str, parts: tuple[str, ...]) -> str:
     key = "/".join(str(p).strip("/") for p in parts if p is not None and p != "")

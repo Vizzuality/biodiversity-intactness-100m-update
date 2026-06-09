@@ -11,3 +11,6 @@ wheels/
 
 # Data files
 data/
+
+# Local env (credentials + per-run pointers)
+.env
