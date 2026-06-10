@@ -16,6 +16,11 @@ _needs_gdal_rasterize = pytest.mark.skipif(
     shutil.which("gdal_rasterize") is None,
     reason="gdal_rasterize CLI not on PATH (required for vector rasterization)",
 )
+# Reprojecting a non-EPSG:4326 source to the grid also shells out to ogr2ogr.
+_needs_gdal_clis = pytest.mark.skipif(
+    shutil.which("gdal_rasterize") is None or shutil.which("ogr2ogr") is None,
+    reason="gdal_rasterize + ogr2ogr CLIs not on PATH (required for reprojecting rasterization)",
+)
 
 
 def _write_geojson(path, geometries) -> str:
@@ -160,6 +165,36 @@ def test_rasterize_to_cog_window_without_features_is_skipped(local_staged, tmp_p
     dst = config.staged_uri("test", "elsewhere.tif")
     assert cog.rasterize_to_cog(src, dst, (0.0, 0.0, 0.2, 0.2)) is None
     assert not cog.exists(dst)
+
+
+@_needs_gdal_clis
+def test_rasterize_to_cog_reprojects_non_4326_source(local_staged, tmp_path):
+    # A source in EPSG:3857 (like ~12% of the SDPT country layers) must be reprojected before
+    # burning — gdal_rasterize burns coordinates onto the degree grid as-is. The helper stages it
+    # to a local 4326 copy via ogr2ogr first; without that the meter coordinates miss the grid
+    # entirely (empty burn) or blow up snap_grid. Polygon ~ a 0.3° box at 10°E, 45°N.
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    # 10°E,45°N -> EPSG:3857 ~ (1113194, 5621521); +0.3° ~ +33000 / +47000 m.
+    gdf = gpd.GeoDataFrame(
+        geometry=[box(1113194, 5621521, 1146600, 5668500)], crs="EPSG:3857"
+    )
+    src = str(tmp_path / "mercator.gpkg")
+    gdf.to_file(src, driver="GPKG", layer="plant")
+    dst = config.staged_uri("test", "reproj.tif")
+
+    bounds = (9.9, 44.9, 10.4, 45.4)  # the window, in EPSG:4326 (the BII grid CRS)
+    fp = cog.rasterize_to_cog(src, dst, bounds, layer="plant")
+
+    assert fp is not None
+    valid, errors, _ = cog_validate(dst)
+    assert valid, errors
+    with rio.open(dst) as r:
+        assert r.crs.to_epsg() == 4326
+        arr = r.read(1)
+    assert set(np.unique(arr)).issubset({0, 1})
+    assert arr.sum() > 0  # the reprojected polygon actually burned onto the degree grid
 
 
 @_needs_gdal_rasterize

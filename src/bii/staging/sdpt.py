@@ -7,11 +7,12 @@ mask (``1`` wherever a polygon falls); FML instead passes its raw class codes th
 consumer normalizes whichever provider it reads.
 
 The source is a file geodatabase (``.gdb.zip``) with one MultiPolygon layer per country/region
-(``<id>_plant_v21``), read in place via ``/vsizip//vsicurl`` (the S3 host supports range
-requests). Each region layer is one staging unit (one Batch job per country, like WorldPop).
-Rasterization is done by ``gdal_rasterize`` straight from the GDB layer (see
-:func:`bii.staging.cog.rasterize_to_cog`) — polygons are never read into Python/geopandas. A
-region with no polygons in the requested window is skipped, keeping the index lean.
+(``<id>_plant_v21``), reached via ``/vsizip//vsicurl`` (the S3 host supports range requests).
+Each region layer is one staging unit (one Batch job per country, like WorldPop).
+:func:`bii.staging.cog.rasterize_to_cog` stages the layer once to a local EPSG:4326 copy (the
+GDB is remote, and ~12% of the country layers are EPSG:3857/UTM rather than 4326) and then burns
+it — polygons are never read into Python/geopandas. A region with no polygons in the requested
+window is skipped, keeping the index lean.
 """
 
 from __future__ import annotations

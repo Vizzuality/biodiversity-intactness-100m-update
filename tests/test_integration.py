@@ -48,18 +48,22 @@ def test_stage_worldpop_country(data_staged):
 
 
 def test_stage_sdpt_country_window_and_empty_skip(data_staged):
-    unit = {"id": "cri", "region": "cri", "layer": "cri_plant_v21"}
+    # El Salvador — a small SDPT layer (~175 polygons) that is *also* EPSG:3857, so it exercises
+    # the reprojection-to-grid path (gdal_rasterize won't reproject; ~12% of SDPT country layers
+    # are EPSG:3857/UTM). Staging localizes the layer once to a local 4326 copy, which both fixes
+    # the CRS and keeps this ~5x faster than a heavy 4326 layer like Costa Rica's.
+    unit = {"id": "slv", "region": "slv", "layer": "slv_plant_v21"}
 
     # A window with no plantation polygons -> empty read -> skipped (returns None, writes
     # nothing). Checked first since the per-region dst is shared across windows.
-    assert sdpt.stage_unit(unit, bounds=(-88.0, 5.0, -87.5, 5.5)) is None
+    assert sdpt.stage_unit(unit, bounds=(-30.0, 0.0, -29.5, 0.5)) is None
 
-    # Costa Rica (the project's test region) — its GDB layer has plantation polygons.
-    result = sdpt.stage_unit(unit, bounds=(-85.5, 9.5, -84.5, 10.5))
+    # El Salvador's full extent (requested in EPSG:4326) — its GDB layer has plantation polygons.
+    result = sdpt.stage_unit(unit, bounds=(-90.2, 13.2, -87.8, 14.0))
     assert result is not None
-    arr = _assert_valid_cog(result["uri"], dtype="uint8")
+    arr = _assert_valid_cog(result["uri"], dtype="uint8")  # asserts the output COG is EPSG:4326
     assert set(np.unique(arr)).issubset({0, 1})
-    assert arr.max() == 1  # some planted forest present
+    assert arr.max() == 1  # some planted forest present (after reprojection from EPSG:3857)
     assert result["year"] is None  # single-epoch
 
     # SDPT shares the forestManagement asset with FML; the index finds the staged tile.

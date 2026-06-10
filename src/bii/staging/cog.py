@@ -11,7 +11,10 @@ paths:
   read into memory.
 * :func:`rasterize_to_cog` — burn an OGR vector source (SDPT planted GDB, OSM roads) onto the
   BII grid by shelling out to the ``gdal_rasterize`` CLI, which streams features in GDAL and
-  never reads geometries into Python/geopandas, then stream-converts the burn to a COG.
+  never reads geometries into Python/geopandas, then stream-converts the burn to a COG. A
+  remote or non-EPSG:4326 source is first staged once to a local EPSG:4326 copy with
+  ``ogr2ogr`` (see :func:`_localize_layer`), since ``gdal_rasterize`` re-reads the whole layer
+  and won't reproject.
 
 All writers return the COG footprint as ``(west, south, east, north)`` in EPSG:4326 so the
 caller can register it in the tile index.
@@ -212,80 +215,104 @@ _GDAL_OT = {
 }
 
 
-def rasterize_to_cog(
+def _config_flags(env: dict) -> list[str]:
+    """``--config K V`` pairs for a GDAL CLI invocation, from a ``rio.Env``-style dict."""
+    flags: list[str] = []
+    for k, v in env.items():
+        flags += ["--config", k, str(v)]
+    return flags
+
+
+def _is_epsg_4326(crs) -> bool:
+    """Whether an OGR/pyproj CRS identifier denotes EPSG:4326.
+
+    Unknown/``None`` is treated as already on grid — the historical assumption for sources with
+    no declared CRS (GeoJSON/OSM, which are WGS84). Anything that resolves to a different EPSG
+    code (many SDPT layers are EPSG:3857 or UTM) must be reprojected before burning.
+    """
+    if not crs:
+        return True
+    try:
+        from pyproj import CRS
+
+        return CRS.from_user_input(crs).to_epsg() == 4326
+    except Exception:
+        return "4326" in str(crs)
+
+
+def _localize_layer(
+    src: str,
+    layer: str | None,
+    where: str | None,
+    spat: tuple[float, float, float, float] | None,
+    env: dict,
+) -> tuple[str, str, int, tuple[float, float, float, float] | None]:
+    """Stream the (``where``-filtered, ``spat``-windowed) vector ``layer`` to a local EPSG:4326
+    GeoPackage with ``ogr2ogr`` and return ``(path, layer_name, n_features, total_bounds_4326)``.
+
+    One pass over ``src`` here replaces what would otherwise be two remote opens by
+    :func:`rasterize_to_cog`: ``gdal_rasterize`` ignores ``-te`` as a spatial filter (it re-reads
+    the whole layer) and is preceded by the emptiness pre-check, so a remote ``/vsizip//vsicurl``
+    GDB would be read end to end twice. It also reprojects: ``gdal_rasterize`` burns coordinates
+    onto the ``-te`` grid as-is and never reprojects, but many SDPT country layers are in
+    EPSG:3857/UTM. ``spat`` is the snapped window in EPSG:4326 (``None`` for the whole layer) and
+    is pushed down through the source spatial index, so an empty window extracts nothing. The
+    caller owns the returned file's parent dir and removes it. Geometries never enter Python.
+    """
+    import pyogrio
+
+    if shutil.which("ogr2ogr") is None:
+        raise RuntimeError(
+            "staging a remote/non-EPSG:4326 vector source requires the ogr2ogr CLI but it is "
+            "not on PATH; install GDAL (the gdal-bin package)."
+        )
+    tmpdir = tempfile.mkdtemp(prefix="bii_localize_")
+    out = os.path.join(tmpdir, "src.gpkg")
+    cmd = ["ogr2ogr", *_config_flags(env), "-t_srs", "EPSG:4326", "-f", "GPKG", "-nln", "feat"]
+    if where:
+        cmd += ["-where", where]
+    if spat is not None:
+        cmd += ["-spat", *(repr(float(x)) for x in spat), "-spat_srs", "EPSG:4326"]
+    cmd += [out, src]
+    if layer:
+        cmd.append(layer)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise RuntimeError(f"ogr2ogr failed ({proc.returncode}): {proc.stderr.strip()}")
+
+    info = pyogrio.read_info(out, layer="feat")
+    tb = info.get("total_bounds")
+    return out, "feat", int(info.get("features") or 0), (tuple(tb) if tb is not None else None)
+
+
+def _burn_to_cog(
     src: str,
     dst: str,
-    bounds: tuple[float, float, float, float] | None = None,
+    layer: str | None,
+    where: str | None,
+    snapped: tuple[float, float, float, float],
+    width: int,
+    height: int,
+    env: dict,
     *,
-    layer: str | None = None,
-    where: str | None = None,
-    res: float | None = None,
-    burn: int = 1,
-    fill: int = 0,
-    dtype: str = "uint8",
-    all_touched: bool = True,
-    nodata: float | None = None,
-    overwrite: bool = False,
-    skip_empty: bool = True,
-    extra_env: dict | None = None,
-) -> tuple[float, float, float, float] | None:
-    """Burn an OGR vector ``src`` onto the BII grid with ``gdal_rasterize`` and write a COG at ``dst``.
-
-    ``src`` is any OGR-readable path — a local file, a filtered ``.osm.pbf`` (``layer="lines"``),
-    or a file geodatabase over ``/vsizip//vsicurl`` (``layer=<region>``). ``gdal_rasterize``
-    streams features inside GDAL and burns them to a temp GeoTIFF; geometries are never read into
-    Python/geopandas. The burn is then stream-converted to a COG (``nearest`` overviews — the
-    output is a categorical mask).
-
-    ``bounds`` (EPSG:4326 west, south, east, north) is snapped outward to the BII grid for the
-    output extent; pass ``None`` to use the source layer's full extent (read from metadata only,
-    no geometry load). ``all_touched=True`` keeps thin features (single-pixel roads) from
-    dropping out. ``where`` is an OGR attribute filter applied to both the emptiness pre-check
-    and the burn. With ``skip_empty`` we test for a matching feature in the output window
-    *before* burning (a bbox-level OGR filter, no geometry into Python) and return ``None`` when
-    none overlaps — avoiding a full grid burn + read-back for the many empty tiles, and keeping
-    the index lean.
-
-    The source must already be in EPSG:4326 (the BII grid CRS) — ``gdal_rasterize`` burns vector
-    coordinates onto the ``-te`` grid as-is and does not reproject. Both callers satisfy this:
-    OSM is WGS84 and the SDPT GDB layers are EPSG:4326.
-    """
-    if not overwrite and exists(dst):
-        return footprint_4326(dst)
+    burn: int,
+    fill: int,
+    dtype: str,
+    all_touched: bool,
+    nodata: float | None,
+    overwrite: bool,
+    extra_env: dict | None,
+) -> tuple[float, float, float, float]:
+    """``gdal_rasterize`` ``src`` onto the snapped ``-te``/``-ts`` grid, then stream the burn to a
+    COG at ``dst`` (``nearest`` overviews — categorical mask). Returns the EPSG:4326 footprint."""
     if shutil.which("gdal_rasterize") is None:
         raise RuntimeError(
             "vector rasterization requires the gdal_rasterize CLI but it is not on PATH; "
             "install GDAL (the gdal-bin package)."
         )
-    env = dict(READ_ENV, **(extra_env or {}))
-
-    import pyogrio
-
-    if bounds is None:
-        with rio.Env(**env):
-            info = pyogrio.read_info(src, layer=layer)
-        if not info.get("features") or info.get("total_bounds") is None:
-            return None  # empty layer -> nothing to burn
-        bounds = tuple(info["total_bounds"])
-
-    width, height, snapped = snap_grid(bounds, res)
     w, s, e, n = (float(x) for x in snapped)
-
-    # No feature's bbox in the window -> the burn would be all-fill, so skip it entirely.
-    # ``max_features=1`` stops after the first match, so this reads at most one feature (not the
-    # whole layer). ``read_geometry=True`` is required: with it off, GDAL's GeoJSON driver skips
-    # the bbox spatial filter for attribute-less features.
-    if skip_empty:
-        with rio.Env(**env):
-            present = pyogrio.read_dataframe(
-                src, layer=layer, where=where, bbox=(w, s, e, n), max_features=1,
-            )
-        if len(present) == 0:
-            return None
-
-    cmd = ["gdal_rasterize"]
-    for k, v in env.items():
-        cmd += ["--config", k, str(v)]
+    cmd = ["gdal_rasterize", *_config_flags(env)]
     cmd += [
         "-burn", str(burn), "-init", str(fill),
         "-ot", _GDAL_OT.get(dtype, "Byte"), "-of", "GTiff",
@@ -315,3 +342,104 @@ def rasterize_to_cog(
         )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def rasterize_to_cog(
+    src: str,
+    dst: str,
+    bounds: tuple[float, float, float, float] | None = None,
+    *,
+    layer: str | None = None,
+    where: str | None = None,
+    res: float | None = None,
+    burn: int = 1,
+    fill: int = 0,
+    dtype: str = "uint8",
+    all_touched: bool = True,
+    nodata: float | None = None,
+    overwrite: bool = False,
+    skip_empty: bool = True,
+    extra_env: dict | None = None,
+) -> tuple[float, float, float, float] | None:
+    """Burn an OGR vector ``src`` onto the BII grid with ``gdal_rasterize`` and write a COG at ``dst``.
+
+    ``src`` is any OGR-readable path — a local file, a filtered ``.osm.pbf`` (``layer="lines"``),
+    or a file geodatabase over ``/vsizip//vsicurl`` (``layer=<region>``). Geometries are never
+    read into Python/geopandas; the burn is stream-converted to a COG (``nearest`` overviews —
+    the output is a categorical mask).
+
+    ``bounds`` (EPSG:4326 west, south, east, north) is snapped outward to the BII grid for the
+    output extent; pass ``None`` to use the source layer's full extent. ``all_touched=True`` keeps
+    thin features (single-pixel roads) from dropping out. ``where`` is an OGR attribute filter.
+    With ``skip_empty`` a window/layer with no matching feature returns ``None`` (no COG written),
+    avoiding a burn for the many empty tiles and keeping the index lean.
+
+    A **remote** source (read over ``/vsicurl``) or one **not in EPSG:4326** is first staged once
+    to a local EPSG:4326 GeoPackage via :func:`_localize_layer` — ``gdal_rasterize`` re-reads the
+    whole layer (it doesn't use ``-te`` as a spatial filter) and never reprojects, so streaming it
+    twice from the remote GDB, or burning EPSG:3857/UTM coordinates onto a degree grid, is avoided.
+    A local source already on the grid (OSM roads) is read in place.
+    """
+    if not overwrite and exists(dst):
+        return footprint_4326(dst)
+    env = dict(READ_ENV, **(extra_env or {}))
+
+    import pyogrio
+
+    # Snap the requested window once so the local extract and the burn share one grid.
+    width = height = None
+    snapped: tuple[float, float, float, float] | None = None
+    if bounds is not None:
+        width, height, snapped = snap_grid(bounds, res)
+
+    # A remote source would be opened twice (pre-check + burn), each a full network pass; a
+    # non-EPSG:4326 source can't be burned onto the degree grid as-is. Either way, stage a single
+    # local EPSG:4326 copy first. (Probe the CRS only for local sources — remote is always staged.)
+    needs_local = "/vsicurl" in src
+    if not needs_local:
+        with rio.Env(**env):
+            info = pyogrio.read_info(src, layer=layer)
+        needs_local = not _is_epsg_4326(info.get("crs"))
+
+    if needs_local:
+        local, llayer, n_features, lbounds = _localize_layer(src, layer, where, snapped, env)
+        try:
+            # The exact feature count from the (filtered, windowed) extract is the emptiness signal.
+            if n_features == 0 and (skip_empty or bounds is None):
+                return None
+            if bounds is None:
+                if lbounds is None:
+                    return None
+                width, height, snapped = snap_grid(lbounds, res)
+            # ``where`` was already applied during the extract.
+            return _burn_to_cog(
+                local, dst, llayer, None, snapped, width, height, env,
+                burn=burn, fill=fill, dtype=dtype, all_touched=all_touched,
+                nodata=nodata, overwrite=overwrite, extra_env=extra_env,
+            )
+        finally:
+            shutil.rmtree(os.path.dirname(local), ignore_errors=True)
+
+    # Local source already on the BII grid: read it in place (opening twice is cheap on disk).
+    if bounds is None:
+        if not info.get("features") or info.get("total_bounds") is None:
+            return None  # empty layer -> nothing to burn
+        width, height, snapped = snap_grid(tuple(info["total_bounds"]), res)
+
+    # No matching feature in the window -> the burn would be all-fill, so skip it. ``max_features=1``
+    # stops after the first hit (reads at most one feature). ``read_geometry`` stays on so GDAL's
+    # GeoJSON driver applies the bbox spatial filter for attribute-less features.
+    if skip_empty:
+        w, s, e, n = (float(x) for x in snapped)
+        with rio.Env(**env):
+            present = pyogrio.read_dataframe(
+                src, layer=layer, where=where, bbox=(w, s, e, n), max_features=1,
+            )
+        if len(present) == 0:
+            return None
+
+    return _burn_to_cog(
+        src, dst, layer, where, snapped, width, height, env,
+        burn=burn, fill=fill, dtype=dtype, all_touched=all_touched,
+        nodata=nodata, overwrite=overwrite, extra_env=extra_env,
+    )
