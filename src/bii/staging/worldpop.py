@@ -6,8 +6,6 @@ overviews use ``average``; the source nodata is preserved by the translate.
 
 from __future__ import annotations
 
-import os
-
 import requests
 
 from .. import config, tile_index
@@ -54,25 +52,16 @@ def list_units(
 
 def stage_unit(
     unit: dict,
-    *,
-    overwrite: bool = False,
     register_index: bool = True,
-    missing_ok: bool = True,
-    **_,
+    missing_ok: bool = False,
 ) -> dict | None:
     dst = _dst(unit["iso3"], unit["year"])
-    if not overwrite and cog.exists(dst):
-        return tile_index.finalize(ASSET, dst, cog.footprint_4326(dst), unit["year"], register_index)
-
-    # WorldPop's host has no HTTP range support, so fetch the GeoTIFF to disk before re-COG'ing.
+    # translate_to_cog downloads the GeoTIFF to disk before re-COG'ing (WorldPop's host has no
+    # HTTP range support anyway); a missing country 404s.
     try:
-        local = cog.fetch(unit["url"])
+        footprint = cog.translate_to_cog(unit["url"], dst, resampling="average")
     except requests.HTTPError:
         if missing_ok:
             return None
         raise
-    try:
-        footprint = cog.translate_to_cog(local, dst, resampling="average", overwrite=overwrite)
-    finally:
-        os.path.exists(local) and os.remove(local)
     return tile_index.finalize(ASSET, dst, footprint, unit["year"], register_index)

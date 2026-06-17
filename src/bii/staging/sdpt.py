@@ -8,14 +8,24 @@ consumer normalizes whichever provider it reads.
 
 The source is a file geodatabase (``.gdb.zip``) with one MultiPolygon layer per country/region
 (``<id>_plant_v21``), reached via ``/vsizip//vsicurl`` (the S3 host supports range requests).
-Each region layer is one staging unit (one Batch job per country, like WorldPop).
-:func:`bii.staging.cog.rasterize_to_cog` stages the layer once to a local EPSG:4326 copy (the
-GDB is remote, and ~12% of the country layers are EPSG:3857/UTM rather than 4326) and then burns
-it — polygons are never read into Python/geopandas. A region with no polygons in the requested
-window is skipped, keeping the index lean.
+Each region layer is one staging unit (one Batch job per country, like WorldPop). Because the GDB
+is remote and ~12% of the country layers are EPSG:3857/UTM rather than 4326, :func:`_localized`
+reprojects the layer to a local EPSG:4326 copy with ``ogr2ogr`` first (``gdal_rasterize`` burns
+onto the degree grid as-is and never reprojects); :func:`bii.staging.cog.rasterize_to_cog` then
+burns that copy — polygons are never read into Python/geopandas. The per-country COG extent is the
+layer's own bounds, read back from the localized copy, so it needs no externally supplied extent.
+A region with no polygons is skipped, keeping the index lean.
 """
 
 from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+from contextlib import contextmanager
+
+import pyogrio
 
 from .. import config, tile_index
 from . import cog
@@ -66,31 +76,48 @@ def list_units(regions: list[str] | None = None) -> list[dict]:
     return [{"id": r, "region": r, "layer": _layer(r)} for r in regions]
 
 
+@contextmanager
+def _localized(src: str, layer: str):
+    """``ogr2ogr`` the GDB ``layer`` to a local EPSG:4326 GeoPackage layer ``feat`` and yield its
+    path; the temp dir is removed on exit.
+
+    ``/vsizip//vsicurl`` range-reads just this country's layer out of the ~7 GB monolithic GDB,
+    where downloading to reproject in geopandas would fetch all 7 GB per Batch job and load the
+    layer into RAM. ogr2ogr streams (geometries never enter Python) and reprojects in the same
+    pass — needed since ~12% of layers are EPSG:3857/UTM and ``gdal_rasterize`` never reprojects.
+    """
+    flags = [f for k, v in cog.GDAL_READ_ENV.items() for f in ("--config", k, str(v))]
+    cmd = ["ogr2ogr", *flags, "-t_srs", "EPSG:4326", "-f", "GPKG", "-nln", "feat"]
+    tmpdir = tempfile.mkdtemp(prefix="bii_sdpt_")
+    try:
+        out = os.path.join(tmpdir, "src.gpkg")
+        cmd += [out, src]
+        if layer:
+            cmd.append(layer)
+        subprocess.run(cmd, check=True)
+        yield out
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _layer_bounds(path: str) -> tuple[float, float, float, float] | None:
+    """The localized layer's EPSG:4326 extent (its features' total bounds), or ``None`` if empty."""
+    info = pyogrio.read_info(path, layer="feat")
+    tb = info.get("total_bounds")
+    return tuple(tb) if info.get("features") and tb is not None else None
+
+
 def stage_unit(
     unit: dict,
-    *,
-    bounds: tuple[float, float, float, float] | None = None,
-    overwrite: bool = False,
     register_index: bool = True,
-    skip_empty: bool = True,
-    **_,
 ) -> dict | None:
     layer = unit.get("layer") or _layer(unit["region"])
     dst = _dst(unit["region"])
-    # gdal_rasterize burns the GDB layer (clipped to ``bounds`` when set, else its full extent)
-    # straight to the BII grid; polygons never enter Python. ``bounds=None`` -> cog reads the
-    # layer extent from metadata. An empty window/layer -> all-fill burn -> skipped (None).
-    # rasterize_to_cog skips the burn when ``dst`` already exists (unless ``overwrite``).
-    footprint = cog.rasterize_to_cog(
-        _source_path(),
-        dst,
-        bounds,
-        layer=layer,
-        dtype="uint8",
-        burn=1,
-        overwrite=overwrite,
-        skip_empty=skip_empty,
-    )
-    if footprint is None:
-        return None
+    # Reproject the remote GDB layer to a local EPSG:4326 copy, then burn it onto the grid over the
+    # layer's own extent (read back from that copy). A layer with no polygons is skipped (None).
+    with _localized(_source_path(), layer) as local:
+        extent = _layer_bounds(local)
+        if extent is None:
+            return None
+        footprint = cog.rasterize_to_cog(local, dst, extent, layer="feat")
     return tile_index.finalize(ASSET, dst, footprint, None, register_index)

@@ -16,16 +16,12 @@ instead of a live per-chunk search).
 from __future__ import annotations
 
 import hashlib
-import os
-import tempfile
-from urllib.parse import urlparse
 
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import box, shape
 
-from . import config
-from .staging import cog
+from . import config, s3io
 
 INDEX_CRS = "EPSG:4326"
 
@@ -50,51 +46,16 @@ def _part_uri(asset: str, uri: str, year: int | None = None) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# GeoParquet I/O (routes s3 through temp files so we don't need s3fs)
+# GeoParquet I/O (via s3io, which stages s3 through temp files so we don't need s3fs)
 # --------------------------------------------------------------------------------------
 def _read_parquet(uri: str) -> gpd.GeoDataFrame:
-    if cog.is_s3(uri):
-        bucket, key = cog._split_s3(uri)
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-            cog._s3_client().download_file(bucket, key, tmp.name)
-            gdf = gpd.read_parquet(tmp.name)
-        os.remove(tmp.name)
-        return gdf
-    return gpd.read_parquet(uri)
+    with s3io.local_copy(uri) as path:
+        return gpd.read_parquet(path)
 
 
 def _write_parquet(gdf: gpd.GeoDataFrame, uri: str) -> None:
-    if cog.is_s3(uri):
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-            gdf.to_parquet(tmp.name)
-            cog.upload(tmp.name, uri)
-        os.remove(tmp.name)
-    else:
-        os.makedirs(os.path.dirname(os.path.abspath(uri)), exist_ok=True)
-        gdf.to_parquet(uri)
-
-
-def _list(prefix_uri: str) -> list[str]:
-    """List object URIs under a prefix (s3 or local directory)."""
-    if cog.is_s3(prefix_uri):
-        p = urlparse(prefix_uri)
-        bucket, prefix = p.netloc, p.path.lstrip("/")
-        client = cog._s3_client()
-        out: list[str] = []
-        token = None
-        while True:
-            kw = dict(Bucket=bucket, Prefix=prefix)
-            if token:
-                kw["ContinuationToken"] = token
-            resp = client.list_objects_v2(**kw)
-            out += [f"s3://{bucket}/{o['Key']}" for o in resp.get("Contents", [])]
-            if not resp.get("IsTruncated"):
-                break
-            token = resp["NextContinuationToken"]
-        return out
-    if os.path.isdir(prefix_uri):
-        return [os.path.join(prefix_uri, f) for f in os.listdir(prefix_uri)]
-    return []
+    with s3io.staged_local_path(uri) as path:
+        gdf.to_parquet(path)
 
 
 def _to_gdf(footprints) -> gpd.GeoDataFrame:
@@ -119,7 +80,7 @@ def build_index(asset: str, footprints, year: int | None = None, append: bool = 
     ``(uri, geometry | (west, south, east, north))``. Dedupes by uri."""
     gdf = _to_gdf(footprints)
     uri = index_uri(asset, year)
-    if append and cog.exists(uri):
+    if append and s3io.exists(uri):
         gdf = gpd.GeoDataFrame(
             pd.concat([_read_parquet(uri), gdf], ignore_index=True),
             crs=INDEX_CRS,
@@ -154,7 +115,7 @@ def finalize(asset: str, dst: str, footprint, year: int | None, register_index: 
 
 def consolidate(asset: str, year: int | None = None) -> str:
     """Merge all registered parts into the asset index GeoParquet."""
-    parts = [p for p in _list(_parts_prefix(asset, year)) if p.endswith(".parquet")]
+    parts = [p for p in s3io.list_uris(_parts_prefix(asset, year)) if p.endswith(".parquet")]
     frames = [_read_parquet(p) for p in parts]
     if not frames:
         raise FileNotFoundError(f"no index parts found for {asset} {year or ''}".strip())
@@ -173,7 +134,7 @@ def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | No
 
     All assets — including resolve from their GeoParquet index."""
     uri = index_uri(asset, year)
-    if not cog.exists(uri):
+    if not s3io.exists(uri):
         return []
     gdf = _read_parquet(uri)
     query = box(*bounds)
@@ -189,6 +150,6 @@ def read_index(asset: str, year: int | None = None) -> gpd.GeoDataFrame | None:
     against thousands of chunks without re-reading the parquet each time.
     """
     uri = index_uri(asset, year)
-    if not cog.exists(uri):
+    if not s3io.exists(uri):
         return None
     return _read_parquet(uri)

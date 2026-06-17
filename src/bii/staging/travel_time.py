@@ -29,14 +29,9 @@ def list_units() -> list[dict]:
 
 def stage_unit(
     unit: dict | None = None,
-    *,
-    overwrite: bool = False,
     register_index: bool = True,
-    **_,
 ) -> dict | None:
     unit = unit or {"url": URL}
     dst = _dst()
-    footprint = cog.translate_to_cog(
-        unit["url"], dst, resampling="average", overwrite=overwrite
-    )
+    footprint = cog.translate_to_cog(unit["url"], dst, resampling="average")
     return tile_index.finalize(ASSET, dst, footprint, None, register_index)

@@ -8,7 +8,7 @@ import rasterio as rio
 from affine import Affine
 from rio_cogeo.cogeo import cog_validate
 
-from bii import config, tile_index
+from bii import config, s3io, tile_index
 from bii.staging import MODULES, cog
 
 # Vector rasterization shells out to the gdal_rasterize CLI; skip those tests where it's absent.
@@ -53,7 +53,7 @@ def test_list_units_shapes():
         assert all("id" in u for u in units), name
 
 
-def test_translate_to_cog_and_skip(local_staged, tmp_path):
+def test_translate_to_cog(local_staged, tmp_path):
     # Write a tiny source raster, then re-COG it; a valid COG with the source's footprint.
     res, n = config.SCALE_DEG, 64
     transform = Affine.translation(-85.0, 9.0 + n * res) * Affine.scale(res, -res)
@@ -63,9 +63,9 @@ def test_translate_to_cog_and_skip(local_staged, tmp_path):
         ds.write(np.ones((n, n), "uint8"), 1)
 
     dst = config.staged_uri("test", "t.tif")
-    assert not cog.exists(dst)
+    assert not s3io.exists(dst)
     fp = cog.translate_to_cog(src, dst, resampling="nearest")
-    assert cog.exists(dst)
+    assert s3io.exists(dst)
 
     valid, errors, _ = cog_validate(dst)
     assert valid, errors
@@ -75,7 +75,8 @@ def test_translate_to_cog_and_skip(local_staged, tmp_path):
     assert fp[0] == pytest.approx(-85.0, abs=1e-6)
     assert fp[3] == pytest.approx(9.0 + n * res, abs=1e-6)
 
-    # Skip-if-exists: a second call returns the same footprint without rewriting.
+    # Always overwrites (existence checks are the orchestrator's job): a second call rewrites the
+    # COG and returns the same footprint.
     assert cog.translate_to_cog(src, dst, resampling="nearest") == fp
 
 
@@ -99,7 +100,7 @@ def test_index_register_and_consolidate(local_staged):
     tile_index.register("population", "s3://b/ALB_2020.tif", (19, 39, 21, 43), year=2020)
     tile_index.register("population", "s3://b/CRI_2020.tif", (-86, 8, -82, 11), year=2020)
     uri = tile_index.consolidate("population", year=2020)
-    assert cog.exists(uri)
+    assert s3io.exists(uri)
 
     hits = tile_index.lookup("population", (20, 40, 20.5, 40.5), year=2020)
     assert hits == ["s3://b/ALB_2020.tif"]
@@ -148,69 +149,6 @@ def test_rasterize_to_cog_polygon_and_line(local_staged, tmp_path):
     assert _open_cog_band(dst2).sum() > 0
 
 
-@_needs_gdal_rasterize
-def test_rasterize_to_cog_empty_is_skipped(local_staged, tmp_path):
-    src = _write_geojson(tmp_path / "empty.geojson", [])
-    dst = config.staged_uri("test", "empty.tif")
-    assert cog.rasterize_to_cog(src, dst, (0.0, 0.0, 0.2, 0.2)) is None
-    assert not cog.exists(dst)
-
-
-def test_rasterize_to_cog_window_without_features_is_skipped(local_staged, tmp_path):
-    # The layer has a feature, but none falls in the requested window -> skipped before burning
-    # (no gdal_rasterize needed: the pre-check returns None).
-    poly = {"type": "Polygon",
-            "coordinates": [[[10.1, 50.1], [10.4, 50.1], [10.4, 50.4], [10.1, 50.4], [10.1, 50.1]]]}
-    src = _write_geojson(tmp_path / "elsewhere.geojson", [poly])
-    dst = config.staged_uri("test", "elsewhere.tif")
-    assert cog.rasterize_to_cog(src, dst, (0.0, 0.0, 0.2, 0.2)) is None
-    assert not cog.exists(dst)
-
-
-@_needs_gdal_clis
-def test_rasterize_to_cog_reprojects_non_4326_source(local_staged, tmp_path):
-    # A source in EPSG:3857 (like ~12% of the SDPT country layers) must be reprojected before
-    # burning — gdal_rasterize burns coordinates onto the degree grid as-is. The helper stages it
-    # to a local 4326 copy via ogr2ogr first; without that the meter coordinates miss the grid
-    # entirely (empty burn) or blow up snap_grid. Polygon ~ a 0.3° box at 10°E, 45°N.
-    import geopandas as gpd
-    from shapely.geometry import box
-
-    # 10°E,45°N -> EPSG:3857 ~ (1113194, 5621521); +0.3° ~ +33000 / +47000 m.
-    gdf = gpd.GeoDataFrame(
-        geometry=[box(1113194, 5621521, 1146600, 5668500)], crs="EPSG:3857"
-    )
-    src = str(tmp_path / "mercator.gpkg")
-    gdf.to_file(src, driver="GPKG", layer="plant")
-    dst = config.staged_uri("test", "reproj.tif")
-
-    bounds = (9.9, 44.9, 10.4, 45.4)  # the window, in EPSG:4326 (the BII grid CRS)
-    fp = cog.rasterize_to_cog(src, dst, bounds, layer="plant")
-
-    assert fp is not None
-    valid, errors, _ = cog_validate(dst)
-    assert valid, errors
-    with rio.open(dst) as r:
-        assert r.crs.to_epsg() == 4326
-        arr = r.read(1)
-    assert set(np.unique(arr)).issubset({0, 1})
-    assert arr.sum() > 0  # the reprojected polygon actually burned onto the degree grid
-
-
-@_needs_gdal_rasterize
-def test_rasterize_to_cog_bounds_from_source(local_staged, tmp_path):
-    # bounds=None -> extent read from the layer's metadata (no geometry load), snapped outward.
-    poly = {"type": "Polygon",
-            "coordinates": [[[1.0, 1.0], [1.2, 1.0], [1.2, 1.2], [1.0, 1.2], [1.0, 1.0]]]}
-    src = _write_geojson(tmp_path / "auto.geojson", [poly])
-    dst = config.staged_uri("test", "auto.tif")
-    fp = cog.rasterize_to_cog(src, dst, None)
-    assert fp is not None
-    # Snapped footprint encloses the polygon extent.
-    assert fp[0] <= 1.0 and fp[1] <= 1.0 and fp[2] >= 1.2 and fp[3] >= 1.2
-    assert _open_cog_band(dst).sum() > 0
-
-
 # --------------------------------------------------------------------------------------
 # sdpt / roads enumeration (no network)
 # --------------------------------------------------------------------------------------
@@ -222,6 +160,58 @@ def test_sdpt_units_match_config():
     cri = next(u for u in units if u["id"] == "cri")
     assert cri["layer"] == "cri_plant_v21"
     assert sdpt.ASSET == "forestManagement"  # provider-agnostic asset, swap point with fml
+
+
+@_needs_gdal_clis
+def test_sdpt_stage_unit_reprojects_non_4326_source(local_staged, tmp_path, monkeypatch):
+    # ~12% of SDPT country layers are EPSG:3857/UTM. stage_unit reprojects the layer to the
+    # EPSG:4326 BII grid (via sdpt._localized) before burning — gdal_rasterize burns coordinates
+    # onto the degree grid as-is. Here the remote GDB is swapped for a local 3857 gpkg; without the
+    # reproject the meter coordinates would miss the grid entirely (empty burn). ~0.3° box at 10°E.
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from bii.staging import sdpt
+
+    # 10°E,45°N -> EPSG:3857 ~ (1113194, 5621521); +0.3° ~ +33000 / +47000 m.
+    gdf = gpd.GeoDataFrame(geometry=[box(1113194, 5621521, 1146600, 5668500)], crs="EPSG:3857")
+    src = str(tmp_path / "mercator.gpkg")
+    gdf.to_file(src, driver="GPKG", layer="plant")
+    monkeypatch.setattr(sdpt, "_source_path", lambda: src)
+
+    result = sdpt.stage_unit({"id": "x", "region": "x", "layer": "plant"})
+
+    assert result is not None
+    dst = result["uri"]
+    valid, errors, _ = cog_validate(dst)
+    assert valid, errors
+    with rio.open(dst) as r:
+        assert r.crs.to_epsg() == 4326
+        arr = r.read(1)
+    assert set(np.unique(arr)).issubset({0, 1})
+    assert arr.sum() > 0  # the reprojected polygon actually burned onto the degree grid
+
+
+@_needs_gdal_clis
+def test_sdpt_stage_unit_reads_bounds_from_source(local_staged, tmp_path, monkeypatch):
+    # With no explicit window, the per-country COG extent is the layer's own bounds, read back
+    # from the localized copy (production stages whole countries; units carry no bounds).
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from bii.staging import sdpt
+
+    poly = box(10.0, 45.0, 10.3, 45.3)  # already EPSG:4326
+    src = str(tmp_path / "wgs84.gpkg")
+    gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326").to_file(src, driver="GPKG", layer="plant")
+    monkeypatch.setattr(sdpt, "_source_path", lambda: src)
+
+    result = sdpt.stage_unit({"id": "x", "region": "x", "layer": "plant"})  # no bounds
+    assert result is not None
+    # The footprint snaps outward from the layer's own extent — it encloses the polygon.
+    w, s, e, n = result["footprint"]
+    assert w <= 10.0 and s <= 45.0 and e >= 10.3 and n >= 45.3
+    assert _open_cog_band(result["uri"]).sum() > 0
 
 
 def test_roads_manifest_units():

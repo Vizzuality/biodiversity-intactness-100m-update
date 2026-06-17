@@ -47,19 +47,14 @@ def test_stage_worldpop_country(data_staged):
     assert result["uri"] in hits
 
 
-def test_stage_sdpt_country_window_and_empty_skip(data_staged):
+def test_stage_sdpt_country(data_staged):
     # El Salvador — a small SDPT layer (~175 polygons) that is *also* EPSG:3857, so it exercises
     # the reprojection-to-grid path (gdal_rasterize won't reproject; ~12% of SDPT country layers
     # are EPSG:3857/UTM). Staging localizes the layer once to a local 4326 copy, which both fixes
-    # the CRS and keeps this ~5x faster than a heavy 4326 layer like Costa Rica's.
+    # the CRS and (being a small country) keeps this fast. The COG extent is read from the GDB
+    # layer itself — units carry no bounds.
     unit = {"id": "slv", "region": "slv", "layer": "slv_plant_v21"}
-
-    # A window with no plantation polygons -> empty read -> skipped (returns None, writes
-    # nothing). Checked first since the per-region dst is shared across windows.
-    assert sdpt.stage_unit(unit, bounds=(-30.0, 0.0, -29.5, 0.5)) is None
-
-    # El Salvador's full extent (requested in EPSG:4326) — its GDB layer has plantation polygons.
-    result = sdpt.stage_unit(unit, bounds=(-90.2, 13.2, -87.8, 14.0))
+    result = sdpt.stage_unit(unit)
     assert result is not None
     arr = _assert_valid_cog(result["uri"], dtype="uint8")  # asserts the output COG is EPSG:4326
     assert set(np.unique(arr)).issubset({0, 1})
@@ -90,9 +85,11 @@ def test_stage_iolulc_index(data_staged):
     assert hits, "expected landcover index to cover the Costa Rica test bounds"
     assert all(isinstance(h, str) for h in hits)
 
-    # A bounds-disjoint year has its own index file; skip-if-exists returns without rewriting.
-    skipped = iolulc.stage_unit(unit)
-    assert skipped is not None and skipped.get("skipped") is True
+    # Always rebuilds (existence checks are the orchestrator's job): a second call rewrites the
+    # index and returns a fresh result, never a skip.
+    again = iolulc.stage_unit(unit)
+    assert again is not None and again["n_items"] == result["n_items"]
+    assert "skipped" not in again
 
 
 @pytest.mark.skipif(

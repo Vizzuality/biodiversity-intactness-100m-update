@@ -21,7 +21,7 @@ import numpy as np
 import rasterio as rio
 from cog_worker import Worker
 
-from . import config, model
+from . import config, model, s3io
 from .staging import cog
 
 # The metrics :func:`bii.model.calc_bii` returns per year; ``compute_all`` emits one COG per
@@ -31,7 +31,7 @@ BII_METRICS = ("abundance", "community_similarity", "bii")
 
 # GDAL read tuning for the remote source reads inside compute_all: caches off so a Batch
 # worker's memory stays bounded, retries on transient HTTP failures. Shared with staging.
-READ_ENV = cog.READ_ENV
+READ_ENV = cog.GDAL_READ_ENV
 
 
 # --------------------------------------------------------------------------------------
@@ -66,27 +66,17 @@ def default_run_id() -> str:
 # --------------------------------------------------------------------------------------
 # COG persistence (ports notebook 3's persist_cog; S3 or local)
 # --------------------------------------------------------------------------------------
-def _put_bytes(data: bytes, uri: str) -> None:
-    if cog.is_s3(uri):
-        bucket, key = cog._split_s3(uri)
-        cog._s3_client().put_object(Bucket=bucket, Key=key, Body=data)
-    else:
-        os.makedirs(os.path.dirname(os.path.abspath(uri)), exist_ok=True)
-        with open(uri, "wb") as f:
-            f.write(data)
-
-
 def persist_cog(worker: Worker, arr: np.ndarray, uri: str, *, skip_existing: bool = True) -> bool:
     """Write ``arr`` (cast to float32) as a COG to ``uri`` (S3 or local) via an in-memory rasterio
     ``MemoryFile`` — no temp file. ``worker.write`` clips the buffer and carries the nodata mask.
     Returns ``False`` if skipped (already there)."""
-    if skip_existing and cog.exists(uri):
+    if skip_existing and s3io.exists(uri):
         return False
     arr = arr.astype(np.float32)
     with rio.MemoryFile() as memfile:
         worker.write(arr, memfile, driver="COG", overview_resampling="average")
         data = memfile.read()
-    _put_bytes(data, uri)
+    s3io.put_bytes(data, uri)
     return True
 
 
@@ -104,7 +94,7 @@ def process(chunk: dict, run_id: str | None = None, *, skip_existing: bool = Tru
     result = {"run_id": run_id, "bounds": list(worker.bounds), "complete": True}
 
     targets = {layer: output_uri(run_id, layer, worker) for layer in output_layers()}
-    if skip_existing and all(cog.exists(uri) for uri in targets.values()):
+    if skip_existing and all(s3io.exists(uri) for uri in targets.values()):
         return result | {"written": [], "skipped": list(targets.values())}
 
     with rio.Env(**READ_ENV):
@@ -121,17 +111,9 @@ def process(chunk: dict, run_id: str | None = None, *, skip_existing: bool = Tru
 # --------------------------------------------------------------------------------------
 # Batch entrypoint — AWS_BATCH_JOB_ARRAY_INDEX -> line N of the S3 chunks.jsonl manifest
 # --------------------------------------------------------------------------------------
-def _read_text(uri: str) -> str:
-    if cog.is_s3(uri):
-        bucket, key = cog._split_s3(uri)
-        return cog._s3_client().get_object(Bucket=bucket, Key=key)["Body"].read().decode()
-    with open(uri) as f:
-        return f.read()
-
-
 def load_chunk(manifest_uri: str, index: int) -> dict:
     """Return chunk ``index`` (0-based line) of a JSONL manifest at ``manifest_uri`` (S3 or local)."""
-    lines = [ln for ln in _read_text(manifest_uri).splitlines() if ln.strip()]
+    lines = [ln for ln in s3io.read_text(manifest_uri).splitlines() if ln.strip()]
     return json.loads(lines[index])
 
 

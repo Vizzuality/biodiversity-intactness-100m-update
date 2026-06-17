@@ -30,8 +30,7 @@ import pandas as pd
 from cog_worker import Manager, Worker
 from shapely.geometry import box
 
-from . import config, model, process, tile_index
-from .staging import cog
+from . import config, model, process, s3io, tile_index
 
 # Any chunk overlapping a staged landcover or roads footprint is land we must process; one
 # overlapping neither is open water and is dropped.
@@ -50,12 +49,12 @@ def manifest_uri(run_id: str, round_: int = 0) -> str:
 
 def write_manifest(items: list[dict], uri: str) -> str:
     """Write ``items`` as JSONL (one chunk dict per line) to ``uri`` (S3 or local)."""
-    process._put_bytes("".join(json.dumps(it) + "\n" for it in items).encode(), uri)
+    s3io.put_bytes("".join(json.dumps(it) + "\n" for it in items).encode(), uri)
     return uri
 
 
 def read_manifest(uri: str) -> list[dict]:
-    return [json.loads(ln) for ln in process._read_text(uri).splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in s3io.read_text(uri).splitlines() if ln.strip()]
 
 
 # --------------------------------------------------------------------------------------
@@ -104,8 +103,8 @@ def chunk_manifest(
 # --------------------------------------------------------------------------------------
 def _list_keys(prefix_uri: str) -> set[str]:
     """All object URIs under ``prefix_uri`` (recursive; S3 or local), as a set for membership."""
-    if cog.is_s3(prefix_uri):
-        return set(tile_index._list(prefix_uri))  # list_objects_v2 is already recursive
+    if s3io.is_s3(prefix_uri):
+        return set(s3io.list_uris(prefix_uri))  # list_objects_v2 is already recursive
     return {
         os.path.join(root, f)
         for root, _, files in os.walk(prefix_uri)
@@ -131,7 +130,7 @@ def missing_chunks(chunks: list[dict], run_id: str) -> list[dict]:
 def _batch_client(client=None):
     if client is not None:
         return client
-    import boto3  # lazy so unit tests don't need credentials (mirrors cog._s3_client)
+    import boto3  # lazy so unit tests don't need credentials (mirrors s3io._client)
 
     return boto3.client("batch", region_name=config.AWS_REGION)
 

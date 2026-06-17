@@ -1,13 +1,13 @@
 """Stage VIIRS Nighttime Lights (VNL) annual median composites -> COG per year.
 
-The source is a gzipped global GeoTIFF (``.tif.gz``) streamed in place via
-``/vsigzip//vsicurl/...`` — no decompress-to-disk. Two wrinkles handled here:
+The source is a gzipped global GeoTIFF (``.tif.gz``) downloaded then read via ``/vsigzip``.
+Two wrinkles handled here:
 
 * The filename embeds a per-release timestamp (``c<TIMESTAMP>``) that isn't predictable, so
   the exact URL must be resolved. Provide it explicitly via :data:`URLS`, or let
   :func:`_resolve_url` scrape the EOG annual directory.
 * EOG now requires a free account; pass a bearer token in the ``BII_EOG_TOKEN`` env var (a
-  credential, not analysis config) for both the directory scrape and the GDAL read.
+  credential, not analysis config) for both the directory scrape and the source download.
 """
 
 from __future__ import annotations
@@ -65,20 +65,14 @@ def list_units(years: list[int] | None = None) -> list[dict]:
 
 def stage_unit(
     unit: dict,
-    *,
-    overwrite: bool = False,
     register_index: bool = True,
-    **_,
 ) -> dict | None:
     year = unit["year"]
     url = unit.get("url") or _resolve_url(year)
-    src = f"/vsigzip//vsicurl/{url}"
     dst = _dst(year)
-    extra_env = {}
+    # EOG now requires a free account; pass the bearer token as a download header. The source is
+    # a .tif.gz, which translate_to_cog reads through /vsigzip after fetching it to disk.
     token = os.environ.get("BII_EOG_TOKEN")
-    if token:
-        extra_env["GDAL_HTTP_HEADERS"] = f"Authorization: Bearer {token}"
-    footprint = cog.translate_to_cog(
-        src, dst, resampling="average", overwrite=overwrite, extra_env=extra_env
-    )
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    footprint = cog.translate_to_cog(url, dst, resampling="average", headers=headers)
     return tile_index.finalize(ASSET, dst, footprint, year, register_index)

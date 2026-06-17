@@ -53,14 +53,11 @@ def _item_footprints(year: int) -> list[tuple[str, object]]:
 
 def stage_unit(
     unit: dict | None = None,
-    *,
     year: int | None = None,
-    overwrite: bool = False,
     register_index: bool = True,
-    **_,
 ) -> dict | None:
-    """Build the landcover footprint index for one year. ``register_index=False`` is a no-op
-    skip (this module's only product *is* the index). Skip-if-exists unless ``overwrite``."""
+    """Build (overwriting) the landcover footprint index for one year. ``register_index=False`` is
+    a no-op skip (this module's only product *is* the index)."""
     year = (unit or {}).get("year", year) if unit else year
     if year is None:
         raise ValueError("iolulc.stage_unit requires a year (via unit['year'] or year=)")
@@ -68,8 +65,6 @@ def stage_unit(
     uri = tile_index.index_uri(ASSET, year)
     if not register_index:
         return None
-    if not overwrite and tile_index.cog.exists(uri):
-        return {"asset": ASSET, "uri": uri, "year": year, "index_part": None, "skipped": True}
 
     footprints = _item_footprints(year)
     tile_index.build_index(ASSET, footprints, year=year)

@@ -131,24 +131,21 @@ def _osmfilter_args() -> list[str]:
     return args
 
 
-def _filter_highways(
-    source: str, bounds: tuple[float, float, float, float] | None, tmpdir: str
-) -> str:
+def _filter_highways(source: str, tmpdir: str) -> str:
     """Filter a local ``.osm.pbf`` to vehicular highways via osmctools and return the path to a
     filtered ``.osm.pbf`` (under ``tmpdir``, which the caller owns and cleans up).
 
     ``osmfilter`` reads o5m/osm (not pbf) and re-reads its input twice, so it needs a seekable
     file rather than a pipe. The pipeline is therefore three steps via temp files:
-    ``osmconvert -> o5m`` (optionally clipped to ``bounds``, relations dropped),
-    ``osmfilter (keep/drop) -> o5m``, ``osmconvert -> pbf``. The pbf is then rasterized in place
-    by ``gdal_rasterize`` (its ``lines`` layer) — geometries never enter Python.
+    ``osmconvert -> o5m`` (relations dropped), ``osmfilter (keep/drop) -> o5m``,
+    ``osmconvert -> pbf``. The pbf is then rasterized in place by ``gdal_rasterize`` (its ``lines``
+    layer) — geometries never enter Python.
     """
     _require_osmctools()
     o5m = os.path.join(tmpdir, "in.o5m")
     roads_o5m = os.path.join(tmpdir, "roads.o5m")
     pbf = os.path.join(tmpdir, "roads.osm.pbf")
-    bbox = [f"-b={bounds[0]},{bounds[1]},{bounds[2]},{bounds[3]}"] if bounds else []
-    _run(["osmconvert", source, *bbox, "--drop-relations", "--out-o5m", f"-o={o5m}"])
+    _run(["osmconvert", source, "--drop-relations", "--out-o5m", f"-o={o5m}"])
     _run(["osmfilter", o5m, *_osmfilter_args(), "--out-o5m", f"-o={roads_o5m}"])
     _run(["osmconvert", roads_o5m, "--out-pbf", f"-o={pbf}"])
     return pbf
@@ -159,17 +156,9 @@ def _filter_highways(
 # --------------------------------------------------------------------------------------
 def stage_unit(
     unit: dict,
-    *,
-    bounds: tuple[float, float, float, float] | None = None,
-    overwrite: bool = False,
     register_index: bool = True,
-    skip_empty: bool = True,
-    **_,
 ) -> dict | None:
     dst = _dst(unit["id"])
-    if not overwrite and cog.exists(dst):
-        return tile_index.finalize(ASSET, dst, cog.footprint_4326(dst), None, register_index)
-
     # A local pbf (tests / pre-staged extract) is read in place; a URL is fetched to disk first
     # (the OSM driver and osmctools both need random access a /vsicurl stream can't serve well).
     src = unit["url"]
@@ -179,28 +168,15 @@ def stage_unit(
         src = fetched
 
     # Filter to highways, then gdal_rasterize burns the filtered pbf's "lines" layer straight to
-    # the BII grid — road geometries never enter Python. A region with no highways (or no
-    # highways in the window) -> all-fill burn -> skipped (None).
-    raster_bounds = bounds or unit.get("bounds")
+    # the BII grid over the region's extent (``unit["bounds"]``, from the Geofabrik manifest) —
+    # road geometries never enter Python. A region with no highways burns to an all-zero mask.
     tmpdir = tempfile.mkdtemp(prefix="osmroads_")
     try:
-        pbf = _filter_highways(src, bounds, tmpdir)
-        footprint = cog.rasterize_to_cog(
-            pbf,
-            dst,
-            raster_bounds,
-            layer=_OSM_LINES_LAYER,
-            dtype="uint8",
-            burn=1,
-            all_touched=True,
-            overwrite=overwrite,
-            skip_empty=skip_empty,
-        )
+        pbf = _filter_highways(src, tmpdir)
+        footprint = cog.rasterize_to_cog(pbf, dst, unit["bounds"], layer=_OSM_LINES_LAYER)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
         if fetched:
             os.path.exists(fetched) and os.remove(fetched)
 
-    if footprint is None:
-        return None
     return tile_index.finalize(ASSET, dst, footprint, None, register_index)

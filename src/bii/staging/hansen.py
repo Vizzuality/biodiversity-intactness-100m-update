@@ -2,12 +2,12 @@
 
 Source tiles are 10x10 deg, 30 m, uint8 on GCS. ``lossyear`` encodes the year of loss
 (1-24 = 2001-2024, 0 = no loss), so it is *categorical* — overviews use ``nearest`` and 0 is
-real data, not nodata. We re-COG each tile in place via ``/vsicurl`` (no bulk download).
+real data, not nodata. Each tile is downloaded then re-COG'd; ocean tiles 404 (no such file).
 """
 
 from __future__ import annotations
 
-from rasterio.errors import RasterioIOError
+import requests
 
 from .. import config, tile_index
 from . import cog
@@ -47,19 +47,14 @@ def list_units(lats: list[str] | None = None, lons: list[str] | None = None) -> 
 
 def stage_unit(
     unit: dict,
-    *,
-    overwrite: bool = False,
     register_index: bool = True,
     missing_ok: bool = True,
-    **_,
 ) -> dict | None:
     """Stage one Hansen 10deg tile (whole tile). Returns None for ocean tiles (no such file)."""
     dst = _dst(unit["lat"], unit["lon"])
     try:
-        footprint = cog.translate_to_cog(
-            unit["url"], dst, resampling="nearest", overwrite=overwrite
-        )
-    except RasterioIOError:
+        footprint = cog.translate_to_cog(unit["url"], dst, resampling="nearest")
+    except requests.HTTPError:
         if missing_ok:
             return None
         raise
