@@ -71,6 +71,26 @@ def _dst(region: str) -> str:
     return config.staged_uri(ASSET, f"{PROVIDER}_{region}.tif")
 
 
+# European ISO3s folded into the consolidated "eu" layer (those without their own region above).
+EU_ISO3 = {
+    "ALB", "AND", "AUT", "BEL", "BGR", "BIH", "BLR", "CHE", "CZE", "DEU", "DNK", "ESP", "EST",
+    "FIN", "FRA", "GBR", "GRC", "HRV", "HUN", "IRL", "ISL", "ITA", "LIE", "LTU", "LUX", "LVA",
+    "MCO", "MDA", "MKD", "MLT", "MNE", "NLD", "NOR", "POL", "PRT", "ROU", "SMR", "SRB", "SVK",
+    "SVN", "SWE", "UKR", "VAT", "XKX",
+}
+
+
+def regions_for(isos) -> set[str]:
+    """sdpt regions covering the given ISO3 countries (Europe folds into the single "eu" layer)."""
+    out = set()
+    for iso in isos:
+        if iso.lower() in REGIONS:
+            out.add(iso.lower())
+        elif iso in EU_ISO3:
+            out.add("eu")
+    return out
+
+
 def list_units(regions: list[str] | None = None) -> list[dict]:
     regions = regions or REGIONS
     return [{"id": r, "region": r, "layer": _layer(r), "dst": _dst(r)} for r in regions]
