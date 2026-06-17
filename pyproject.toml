@@ -15,6 +15,7 @@ dependencies = [
     "pystac-client",
     "planetary-computer",
     "boto3",
+    "s3fs>=2024",
 ]
 
 [project.optional-dependencies]

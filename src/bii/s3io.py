@@ -92,23 +92,6 @@ def put_bytes(data: bytes, uri: str) -> None:
             f.write(data)
 
 
-@contextmanager
-def local_copy(uri: str):
-    """Yield a local path for reading ``uri``: the path itself when local, else an s3 download to
-    a temp file that is removed on exit."""
-    if is_s3(uri):
-        bucket, key = _split_s3(uri)
-        tmp = tempfile.NamedTemporaryFile(suffix=os.path.splitext(key)[1] or ".tmp", delete=False)
-        tmp.close()
-        try:
-            _client().download_file(bucket, key, tmp.name)
-            yield tmp.name
-        finally:
-            os.path.exists(tmp.name) and os.remove(tmp.name)
-    else:
-        yield uri
-
-
 def read_text(uri: str) -> str:
     """Read ``uri`` as text (s3 get or local read)."""
     if is_s3(uri):

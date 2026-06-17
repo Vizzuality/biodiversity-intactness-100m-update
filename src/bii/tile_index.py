@@ -46,13 +46,8 @@ def _part_uri(asset: str, uri: str, year: int | None = None) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# GeoParquet I/O (via s3io, which stages s3 through temp files so we don't need s3fs)
+# GeoParquet I/O (gpd reads s3:// directly; writes stage through s3io)
 # --------------------------------------------------------------------------------------
-def _read_parquet(uri: str) -> gpd.GeoDataFrame:
-    with s3io.local_copy(uri) as path:
-        return gpd.read_parquet(path)
-
-
 def _write_parquet(gdf: gpd.GeoDataFrame, uri: str) -> None:
     with s3io.staged_local_path(uri) as path:
         gdf.to_parquet(path)
@@ -82,7 +77,7 @@ def build_index(asset: str, footprints, year: int | None = None, append: bool = 
     uri = index_uri(asset, year)
     if append and s3io.exists(uri):
         gdf = gpd.GeoDataFrame(
-            pd.concat([_read_parquet(uri), gdf], ignore_index=True),
+            pd.concat([gpd.read_parquet(uri), gdf], ignore_index=True),
             crs=INDEX_CRS,
         )
     gdf = gdf.drop_duplicates(subset="uri", keep="last").reset_index(drop=True)
@@ -116,7 +111,7 @@ def finalize(asset: str, dst: str, footprint, year: int | None, register_index: 
 def consolidate(asset: str, year: int | None = None) -> str:
     """Merge all registered parts into the asset index GeoParquet."""
     parts = [p for p in s3io.list_uris(_parts_prefix(asset, year)) if p.endswith(".parquet")]
-    frames = [_read_parquet(p) for p in parts]
+    frames = [gpd.read_parquet(p) for p in parts]
     if not frames:
         raise FileNotFoundError(f"no index parts found for {asset} {year or ''}".strip())
     gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=INDEX_CRS)
@@ -136,7 +131,7 @@ def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | No
     uri = index_uri(asset, year)
     if not s3io.exists(uri):
         return []
-    gdf = _read_parquet(uri)
+    gdf = gpd.read_parquet(uri)
     query = box(*bounds)
     idx = list(gdf.sindex.query(query, predicate="intersects"))
     return gdf.iloc[idx]["uri"].tolist()
@@ -152,4 +147,4 @@ def read_index(asset: str, year: int | None = None) -> gpd.GeoDataFrame | None:
     uri = index_uri(asset, year)
     if not s3io.exists(uri):
         return None
-    return _read_parquet(uri)
+    return gpd.read_parquet(uri)
