@@ -132,7 +132,7 @@ def _batch_client(client=None):
         return client
     import boto3  # lazy so unit tests don't need credentials (mirrors s3io._client)
 
-    return boto3.client("batch", region_name=config.AWS_REGION)
+    return boto3.client("batch")
 
 
 def submit_array(

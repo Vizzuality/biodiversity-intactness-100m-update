@@ -60,7 +60,7 @@ def _dst(year: int) -> str:
 
 def list_units(years: list[int] | None = None) -> list[dict]:
     years = years or config.years()
-    return [{"id": str(y), "year": y} for y in years]
+    return [{"id": str(y), "year": y, "dst": _dst(y)} for y in years]
 
 
 def stage_unit(

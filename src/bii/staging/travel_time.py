@@ -24,7 +24,7 @@ def _dst() -> str:
 
 
 def list_units() -> list[dict]:
-    return [{"id": "global", "url": URL}]
+    return [{"id": "global", "url": URL, "dst": _dst()}]
 
 
 def stage_unit(

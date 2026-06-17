@@ -96,6 +96,7 @@ def list_units(regions: list[str] | None = None) -> list[dict]:
                 "url": row["pbf"],
                 "name": row.get("name"),
                 "bounds": tuple(row.geometry.bounds),  # (w, s, e, n) EPSG:4326
+                "dst": _dst(row["id"]),
             }
         )
     return units

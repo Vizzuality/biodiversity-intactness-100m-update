@@ -44,7 +44,8 @@ def list_units(
     countries = countries or COUNTRIES
     years = years or config.years()
     return [
-        {"id": f"{iso3}_{year}", "iso3": iso3, "year": year, "url": _url(iso3, year)}
+        {"id": f"{iso3}_{year}", "iso3": iso3, "year": year, "url": _url(iso3, year),
+         "dst": _dst(iso3, year)}
         for year in years
         for iso3 in countries
     ]

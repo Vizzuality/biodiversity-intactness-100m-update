@@ -29,7 +29,7 @@ def _split_s3(uri: str) -> tuple[str, str]:
 
 
 def _client():
-    return boto3.client("s3", region_name=config.AWS_REGION)
+    return boto3.client("s3")
 
 
 def exists(uri: str) -> bool:

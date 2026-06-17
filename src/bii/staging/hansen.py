@@ -39,7 +39,8 @@ def list_units(lats: list[str] | None = None, lons: list[str] | None = None) -> 
     lats = lats or LATS
     lons = lons or LONS
     return [
-        {"id": f"{lat}_{lon}", "lat": lat, "lon": lon, "url": _tile_url(lat, lon)}
+        {"id": f"{lat}_{lon}", "lat": lat, "lon": lon, "url": _tile_url(lat, lon),
+         "dst": _dst(lat, lon)}
         for lat in lats
         for lon in lons
     ]

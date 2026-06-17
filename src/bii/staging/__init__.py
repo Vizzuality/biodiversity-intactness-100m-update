@@ -3,8 +3,12 @@
 Every module exposes the same pair so the CLI / orchestrator can fan out one Batch array
 job per unit, dispatching by name via the :data:`MODULES` registry:
 
-    list_units(...) -> list[dict]      # enumerate work; each unit has a stable "id"
+    list_units(...) -> list[dict]      # enumerate work; each unit has a stable "id" + output "dst"
     stage_unit(unit, ...) -> dict|None # stage one unit; None == skipped (e.g. ocean tile)
+
+Every unit carries its output URI as ``dst`` so the orchestrator (:mod:`bii.stage`) can do the
+skip-if-exists check without dataset-specific knowledge; per-year modules' ``list_units`` takes a
+``years`` filter.
 
 ``stage_unit`` returns its result via :func:`bii.tile_index.finalize`, which registers the
 COG's footprint and packs ``{asset, uri, footprint, year, index_part}``.

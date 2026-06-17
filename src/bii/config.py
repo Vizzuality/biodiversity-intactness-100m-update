@@ -16,11 +16,9 @@ from __future__ import annotations
 BUCKET = "vizz-bii"
 
 # Key prefixes within the bucket.
-STAGED_PREFIX = "staged"
+STAGED_PREFIX = "input_cogs"
 OUT_PREFIX = "out"
 
-# AWS region the bucket lives in (used to build https URLs / clients).
-AWS_REGION = "us-west-2"
 
 # Roots for staged inputs and outputs. Default to S3; monkeypatch to a local directory to run
 # staging/processing entirely on local disk — used by tests and the single-unit local gate.

@@ -73,7 +73,7 @@ def _dst(region: str) -> str:
 
 def list_units(regions: list[str] | None = None) -> list[dict]:
     regions = regions or REGIONS
-    return [{"id": r, "region": r, "layer": _layer(r)} for r in regions]
+    return [{"id": r, "region": r, "layer": _layer(r), "dst": _dst(r)} for r in regions]
 
 
 @contextmanager

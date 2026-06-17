@@ -28,7 +28,10 @@ COLLECTION = "io-10m-annual-lulc"
 
 
 def list_units(years: list[int] | None = None) -> list[dict]:
-    return [{"id": str(y), "year": y} for y in (years or config.years())]
+    # ``dst`` is the per-year index parquet itself (this asset's only product — no COG), so the
+    # orchestrator's skip-if-exists check works uniformly with the COG-producing modules.
+    return [{"id": str(y), "year": y, "dst": tile_index.index_uri(ASSET, y)}
+            for y in (years or config.years())]
 
 
 def _item_footprints(year: int) -> list[tuple[str, object]]:
