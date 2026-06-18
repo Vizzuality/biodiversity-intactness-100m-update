@@ -29,7 +29,7 @@ import tempfile
 
 import geopandas as gpd
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "roads"
@@ -155,10 +155,7 @@ def _filter_highways(source: str, tmpdir: str) -> str:
 # --------------------------------------------------------------------------------------
 # Stage one region
 # --------------------------------------------------------------------------------------
-def stage_unit(
-    unit: dict,
-    register_index: bool = True,
-) -> dict | None:
+def stage_unit(unit: dict) -> bool:
     dst = _dst(unit["id"])
     # A local pbf (tests / pre-staged extract) is read in place; a URL is fetched to disk first
     # (the OSM driver and osmctools both need random access a /vsicurl stream can't serve well).
@@ -174,10 +171,10 @@ def stage_unit(
     tmpdir = tempfile.mkdtemp(prefix="osmroads_")
     try:
         pbf = _filter_highways(src, tmpdir)
-        footprint = cog.rasterize_to_cog(pbf, dst, unit["bounds"], layer=_OSM_LINES_LAYER)
+        cog.rasterize_to_cog(pbf, dst, unit["bounds"], layer=_OSM_LINES_LAYER)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
         if fetched:
             os.path.exists(fetched) and os.remove(fetched)
 
-    return tile_index.finalize(ASSET, dst, footprint, None, register_index)
+    return True

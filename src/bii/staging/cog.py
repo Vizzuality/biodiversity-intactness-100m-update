@@ -12,8 +12,9 @@ Two cases, both producing a Cloud-Optimized GeoTIFF via GDAL's native ``COG`` dr
   local EPSG:4326 copy by the caller first (see :func:`bii.staging.sdpt._localized`). Geometries
   never enter Python.
 
-Both writers return the COG footprint as ``(west, south, east, north)`` in EPSG:4326 for the
-tile index. Destination handling (local path vs ``s3://``) lives in :mod:`bii.s3io`.
+Both writers just produce the COG; the footprint index is rebuilt from the written COGs' headers
+afterwards (:func:`bii.tile_index.index_cogs`). Destination handling (local path vs ``s3://``)
+lives in :mod:`bii.s3io`.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ import numpy as np
 import rasterio as rio
 import rasterio.shutil
 import requests
-from rasterio.warp import transform_bounds
 
 from .. import config, s3io
 
@@ -67,8 +67,8 @@ def translate_to_cog(
     *,
     resampling: str = "average",
     headers: dict | None = None,
-) -> tuple[float, float, float, float]:
-    """Convert raster ``src`` into a COG at ``dst`` (overwriting) and return its EPSG:4326 footprint.
+) -> None:
+    """Convert raster ``src`` into a COG at ``dst`` (overwriting).
 
     ``src`` is a local path or an ``http(s)://`` URL; URLs are downloaded to a temp file first.
     A ``.gz`` source is read through ``/vsigzip``. ``headers`` are sent with the download.
@@ -85,9 +85,6 @@ def translate_to_cog(
                 s, out, driver="COG", compress="ZSTD", predictor=predictor,
                 blocksize=512, overview_resampling=resampling,
             )
-            # The COG preserves the source CRS/bounds, so read the footprint here and skip a
-            # re-open of dst (which would be a network read for an S3 destination).
-            return tuple(transform_bounds(s.crs, "EPSG:4326", *s.bounds))  # type: ignore[return-value]
     finally:
         if local is not src:
             os.path.exists(local) and os.remove(local)
@@ -118,9 +115,9 @@ def rasterize_to_cog(
     dst: str,
     bounds: tuple[float, float, float, float],
     layer: str | None = None,
-) -> tuple[float, float, float, float]:
+) -> None:
     """Burn a *local EPSG:4326* OGR vector ``src`` onto the BII grid with ``gdal_rasterize`` and
-    write a COG at ``dst`` (overwriting); return its EPSG:4326 footprint.
+    write a COG at ``dst`` (overwriting).
 
     ``src`` must already be in EPSG:4326 — ``gdal_rasterize`` burns coordinates onto the degree
     grid as-is and never reprojects, so a remote or reprojected source must be staged to a local
@@ -144,6 +141,6 @@ def rasterize_to_cog(
         tmp_tif = os.path.join(tmpdir, "burn.tif")
         cmd += [src, tmp_tif]
         subprocess.run(cmd, check=True)
-        return translate_to_cog(tmp_tif, dst, resampling="nearest")
+        translate_to_cog(tmp_tif, dst, resampling="nearest")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

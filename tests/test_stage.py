@@ -5,6 +5,7 @@ worker dispatch is exercised against a stub dataset module injected into ``MODUL
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,7 +19,7 @@ def local_roots(tmp_path, monkeypatch):
 
 
 class _StubModule:
-    """A dataset module: two units, stage_unit records and returns a finalize-shaped result."""
+    """A dataset module: two units, stage_unit records the id and reports it produced output."""
 
     ASSET = "fake"
 
@@ -31,17 +32,16 @@ class _StubModule:
 
     def stage_unit(self, unit):
         self.staged.append(unit["id"])
-        return {"asset": self.ASSET, "uri": unit["dst"], "footprint": [0, 0, 1, 1],
-                "year": None, "index_part": "part"}
+        return True
 
 
 @pytest.fixture
 def stub(monkeypatch):
     mod = _StubModule()
     monkeypatch.setitem(stage.MODULES, "fake", mod)
-    # consolidate would read parquet parts; stub it to just record the (asset, year) pairs.
+    # index_cogs would list + read COG headers; stub it to just record the (asset, year) pairs.
     calls = []
-    monkeypatch.setattr(tile_index, "consolidate",
+    monkeypatch.setattr(tile_index, "index_cogs",
                         lambda asset, year=None: calls.append((asset, year)) or f"idx:{asset}")
     mod.consolidated = calls
     return mod
@@ -81,14 +81,14 @@ def test_manifest_items_records_asset_for_consolidation(stub):
 def test_worker_dispatches_to_module_by_manifest_line(stub, local_roots):
     uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri("t"))
     result = stage_worker.worker(uri, 1)  # line 1 -> second unit
-    assert result["uri"] == "s3://b/fake/u2.tif" and stub.staged == ["u2"]
+    assert result["dst"] == "s3://b/fake/u2.tif" and result["staged"] and stub.staged == ["u2"]
 
 
 def test_worker_main_reads_env(stub, local_roots, monkeypatch):
     uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri("t"))
     monkeypatch.setenv("BII_STAGE_MANIFEST", uri)
     monkeypatch.setenv("AWS_BATCH_JOB_ARRAY_INDEX", "0")
-    assert stage_worker.worker_main()["uri"] == "s3://b/fake/u1.tif"
+    assert stage_worker.worker_main()["dst"] == "s3://b/fake/u1.tif"
 
 
 def test_worker_main_requires_manifest(monkeypatch):
@@ -104,7 +104,8 @@ def test_run_docker_one_container_per_unit_with_per_image_group(stub, local_root
     monkeypatch.setenv("BII_STAGE_IMAGE", "img")
     monkeypatch.setenv("BII_STAGE_ROADS_IMAGE", "roadsimg")
     calls = []
-    monkeypatch.setattr(stage.subprocess, "run", lambda cmd, check: calls.append(cmd))
+    monkeypatch.setattr(stage.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
     items = _items(("fake", "u1", "s3://b/fake/u1.tif", "fake"),
                    ("roads", "r1", "s3://b/roads/r1.tif", "roads"))
     monkeypatch.setattr(stage, "_pending", lambda its: items)  # force both pending
@@ -119,9 +120,8 @@ def test_run_docker_one_container_per_unit_with_per_image_group(stub, local_root
 
 
 def test_run_docker_continues_past_failure_and_reports_exception(stub, local_roots, monkeypatch):
-    def boom(cmd, check):
-        raise stage.subprocess.CalledProcessError(2, cmd)
-    monkeypatch.setattr(stage.subprocess, "run", boom)
+    monkeypatch.setattr(stage.subprocess, "run",
+                        lambda cmd, **kw: SimpleNamespace(returncode=2, stdout=""))
     items = _items(("fake", "u1", "s3://b/fake/u1.tif", "fake"))
     monkeypatch.setattr(stage, "_pending", lambda its: items)
 

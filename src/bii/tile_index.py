@@ -6,16 +6,18 @@ asset is queried through one backend: a spatial query of the cached GeoParquet v
 ``.sindex``. :func:`lookup` answers "which tiles overlap this chunk?" for the processing
 worker.
 
-Staging writes the index: each unit registers a one-row *part* (so parallel Batch jobs don't
-race on a single file); :func:`consolidate` merges parts into the asset index. :func:`build_index`
-is the all-at-once path used locally and by the orchestrator (and by
-:mod:`bii.staging.iolulc`, which pre-walks the IO STAC so landcover joins the staged backend
-instead of a live per-chunk search).
+Staging never writes the index. Workers only write COGs (atomically, via
+:func:`bii.s3io.staged_local_path`), so the index is rebuilt after a run from the COGs that
+actually landed: :func:`index_cogs` enumerates an asset's staged COGs and reads each one's
+header footprint. This makes the index a pure function of the bucket — rebuildable any time,
+and immune to a worker dying between writing a COG and recording it. :func:`build_index` is the
+explicit ``(uri, geometry)`` path used by :mod:`bii.staging.iolulc`, which pre-walks the IO STAC
+so landcover joins the staged backend instead of a live per-chunk search.
 """
 
 from __future__ import annotations
 
-import hashlib
+import os
 
 import geopandas as gpd
 import pandas as pd
@@ -33,16 +35,6 @@ def index_uri(asset: str, year: int | None = None) -> str:
     if year is None:
         return config.staged_uri(asset, f"{asset}_index.parquet")
     return config.staged_uri(asset, str(year), f"{asset}_{year}_index.parquet")
-
-
-def _parts_prefix(asset: str, year: int | None = None) -> str:
-    base = index_uri(asset, year)
-    return base[: -len(".parquet")] + "_parts/"
-
-
-def _part_uri(asset: str, uri: str, year: int | None = None) -> str:
-    digest = hashlib.sha1(uri.encode()).hexdigest()[:16]
-    return _parts_prefix(asset, year) + f"{digest}.parquet"
 
 
 # --------------------------------------------------------------------------------------
@@ -68,7 +60,7 @@ def _to_gdf(footprints) -> gpd.GeoDataFrame:
 
 
 # --------------------------------------------------------------------------------------
-# Build / register / consolidate
+# Build / rebuild-from-COGs
 # --------------------------------------------------------------------------------------
 def build_index(asset: str, footprints, year: int | None = None, append: bool = False) -> str:
     """Write ``{geometry, uri}`` GeoParquet for ``asset``. ``footprints`` is an iterable of
@@ -85,40 +77,34 @@ def build_index(asset: str, footprints, year: int | None = None, append: bool = 
     return uri
 
 
-def register(asset: str, uri: str, footprint, year: int | None = None) -> str:
-    """Register one staged COG as a single-row *part* (race-free for parallel Batch jobs)."""
-    gdf = _to_gdf([(uri, footprint)])
-    part = _part_uri(asset, uri, year)
-    _write_parquet(gdf, part)
-    return part
+def cog_footprint(uri: str) -> tuple[float, float, float, float]:
+    """Read a staged COG's EPSG:4326 footprint ``(west, south, east, north)`` from its header."""
+    import rasterio as rio
+    from rasterio.warp import transform_bounds
+
+    from .staging.cog import GDAL_READ_ENV
+    with rio.Env(**GDAL_READ_ENV), rio.open(uri) as s:
+        return tuple(transform_bounds(s.crs, INDEX_CRS, *s.bounds))
 
 
-def finalize(asset: str, dst: str, footprint, year: int | None, register_index: bool) -> dict:
-    """Register the staged COG's footprint (as an index part) and return the staging result.
-
-    The result dict ``{asset, uri, footprint, year, index_part}`` is the shape every
-    ``stage_unit`` returns (see :mod:`bii.staging`)."""
-    part = register(asset, dst, footprint, year) if register_index else None
-    return {
-        "asset": asset,
-        "uri": dst,
-        "footprint": list(footprint),
-        "year": year,
-        "index_part": part,
-    }
+def _asset_cogs(asset: str, year: int | None) -> list[str]:
+    """Staged COG URIs for ``asset``: every ``.tif`` under its prefix (recursive), filtered to the
+    year — annual assets embed the year in the COG path, single-epoch assets take all."""
+    prefix = config.staged_uri(asset)
+    if s3io.is_s3(prefix):
+        uris = s3io.list_uris(prefix + "/")  # list_objects_v2 is recursive
+    else:
+        uris = [os.path.join(r, f) for r, _, fs in os.walk(prefix) for f in fs] \
+            if os.path.isdir(prefix) else []
+    return [u for u in uris if u.endswith(".tif") and (year is None or str(year) in u)]
 
 
-def consolidate(asset: str, year: int | None = None) -> str:
-    """Merge all registered parts into the asset index GeoParquet."""
-    parts = [p for p in s3io.list_uris(_parts_prefix(asset, year)) if p.endswith(".parquet")]
-    frames = [gpd.read_parquet(p) for p in parts]
-    if not frames:
-        raise FileNotFoundError(f"no index parts found for {asset} {year or ''}".strip())
-    gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=INDEX_CRS)
-    gdf = gdf.drop_duplicates(subset="uri", keep="last").reset_index(drop=True)
-    uri = index_uri(asset, year)
-    _write_parquet(gdf, uri)
-    return uri
+def index_cogs(asset: str, year: int | None = None) -> str:
+    """Rebuild ``asset``'s index from its staged COGs, reading each one's header footprint."""
+    uris = _asset_cogs(asset, year)
+    if not uris:
+        raise FileNotFoundError(f"no staged COGs for {asset} {year or ''}".strip())
+    return build_index(asset, [(u, cog_footprint(u)) for u in uris], year=year)
 
 
 # --------------------------------------------------------------------------------------

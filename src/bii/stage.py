@@ -1,8 +1,8 @@
 """Staging orchestrator + per-unit worker.
 
 Enumerates every staging unit (one COG/tile/year per dataset), stages the ones whose output is
-missing (or all, with ``overwrite``), and consolidates each fully-staged asset's footprint index
-from its parts. Two executors run the same per-unit work over the same per-image manifests +
+missing (or all, with ``overwrite``), and rebuilds each fully-staged asset's footprint index from
+its staged COGs. Two executors run the same per-unit work over the same per-image manifests +
 ``AWS_BATCH_JOB_ARRAY_INDEX`` contract, so a local docker run exercises exactly what Batch will:
 
 * ``docker`` — ``docker run`` one container per unit (default; test the images locally; roads uses
@@ -14,7 +14,7 @@ Both dispatch the ``bii-stage-worker`` entrypoint in :mod:`bii.stage_worker`. A 
 ``ASSET``, so this module stays dataset-agnostic. The skip-if-exists decision lives here; the
 per-unit staging lives in the worker. A unit that legitimately produces nothing (an ocean Hansen
 tile 404s) exits 0 and is not a failure; one whose worker exits non-zero (docker) or whose Batch
-child ends FAILED after retries is reported, and its asset's index is left unconsolidated.
+child ends FAILED after retries is reported, and its asset's index is left unrebuilt.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from .staging import MODULES
 
 # Datasets whose container needs osmctools (the roads image); everything else uses the raster image.
 ROADS_DATASETS = ("roads",)
-# landcover builds its index in place (no parts) -> consolidate-exempt.
+# landcover builds its index in place (STAC hrefs, no COGs) -> rebuild-exempt.
 INDEX_IN_PLACE = ("iolulc",)
 # Host env forwarded into docker containers (S3 creds + staging tokens; -e NAME passes the value).
 _FORWARD_ENV = (
@@ -55,7 +55,7 @@ def plan(dataset: str | None = None, year: int | None = None) -> list[tuple[str,
 
 def manifest_items(dataset: str | None = None, year: int | None = None) -> list[dict]:
     """The plan as worker-readable manifest lines: ``{dataset, unit, asset, year}``. ``asset``/``year``
-    are recorded so the orchestrator can consolidate indexes after a Batch/docker run without the
+    are recorded so the orchestrator can rebuild indexes after a Batch/docker run without the
     workers' return values."""
     return [{"dataset": name, "unit": unit, "asset": MODULES[name].ASSET, "year": unit.get("year")}
             for name, unit in plan(dataset, year)]
@@ -104,7 +104,7 @@ def docker_run(image: str, command: list[str], *, env: dict | None = None,
     """One ``docker run --rm`` mirroring a Batch job: forward the host creds in ``_FORWARD_ENV``
     and set ``env`` (the job-definition environment). ``store`` is the local stand-in for the S3
     store — bind-mounted at the same absolute path and pointed at by ``BII_STAGED_ROOT`` /
-    ``BII_OUT_ROOT``, so the container reads the manifest and writes COGs + index parts to it."""
+    ``BII_OUT_ROOT``, so the container reads the manifest and writes its COGs to it."""
     args = ["docker", "run", "--rm"]
     if store:
         args += ["-v", f"{store}:{store}"]
@@ -210,11 +210,11 @@ def _run_batch(items: list[dict], *, client=None, wait_fn=None) -> list[dict]:
 
 
 def _consolidate(assets) -> list[str]:
-    """Merge index parts for each ``(asset, year)``; skip assets that registered none (all skipped)."""
+    """Rebuild each ``(asset, year)`` index from its staged COGs; skip assets with none staged."""
     out = []
     for asset, yr in sorted(assets, key=lambda a: (a[0], a[1] or 0)):
         try:
-            out.append(tile_index.consolidate(asset, yr))
+            out.append(tile_index.index_cogs(asset, yr))
         except FileNotFoundError:
             pass
     return out
@@ -226,9 +226,9 @@ def _consolidate(assets) -> list[str]:
 def run(dataset: str | None = None, year: int | None = None, *, executor: str = "docker",
         overwrite: bool = False, client=None, wait_fn=None) -> dict:
     """Stage the planned units (skipping those whose ``dst`` exists unless ``overwrite``) via the
-    chosen executor (``docker`` locally / ``batch`` on AWS), then consolidate the footprint index of
+    chosen executor (``docker`` locally / ``batch`` on AWS), then rebuild the footprint index of
     every fully-staged asset. The run continues past a failed unit; failures are reported and their
-    asset's index is left unconsolidated."""
+    asset's index is left unrebuilt."""
     items = manifest_items(dataset, year)
     pending = items if overwrite else _pending(items)
     print_summary(items, pending)
@@ -243,9 +243,9 @@ def run(dataset: str | None = None, year: int | None = None, *, executor: str = 
     else:
         raise SystemExit(f"unknown executor {executor!r} (docker | batch)")
 
-    # Consolidation set = the plan (every staged dataset but landcover, which builds its index in
-    # place), minus assets with a failed unit: a missing footprint part would silently under-cover
-    # the orchestrator's ocean-drop (real land chunks dropped), so leave that asset's prior index.
+    # Rebuild set = the plan (every staged dataset but landcover, which builds its index in place),
+    # minus assets with a failed unit: a missing COG would silently under-cover the orchestrator's
+    # ocean-drop (real land chunks dropped), so leave that asset's prior index.
     assets = {(it["asset"], it["year"]) for it in pending if it["dataset"] not in INDEX_IN_PLACE}
     incomplete = {(f["asset"], f["year"]) for f in failed}
     return {"planned": len(items), "pending": len(pending), "executor": executor, "failed": failed,

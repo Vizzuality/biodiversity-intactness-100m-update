@@ -18,7 +18,7 @@ import re
 
 import requests
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "nightlights"
@@ -65,14 +65,11 @@ def list_units(years: list[int] | None = None) -> list[dict]:
     return [{"id": str(y), "year": y, "dst": _dst(y)} for y in years]
 
 
-def stage_unit(
-    unit: dict,
-    register_index: bool = True,
-) -> dict | None:
+def stage_unit(unit: dict) -> bool:
     year = unit["year"]
     url = unit.get("url") or _resolve_url(year)
     dst = _dst(year)
     # EOG only allows browser (session) access; pass the openidc cookie as a download header. The
     # source is a .tif.gz, which translate_to_cog reads through /vsigzip after fetching it to disk.
-    footprint = cog.translate_to_cog(url, dst, resampling="average", headers=_headers() or None)
-    return tile_index.finalize(ASSET, dst, footprint, year, register_index)
+    cog.translate_to_cog(url, dst, resampling="average", headers=_headers() or None)
+    return True

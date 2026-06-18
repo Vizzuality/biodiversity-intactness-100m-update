@@ -10,8 +10,8 @@ This replaces the old per-chunk live STAC search (``tile_index._lookup_lulc``): 
 walk happens once during staging instead of on every chunk read.
 
 One unit per year -> one Batch array index. Each year writes a distinct per-year index file
-(:func:`bii.tile_index.index_uri`), so parallel jobs never race on a shared file and the
-``register``/``consolidate`` parts machinery is unnecessary.
+(:func:`bii.tile_index.index_uri`) directly — this asset has no COGs, so the orchestrator's
+rebuild-from-COGs step skips it (it is listed in ``stage.INDEX_IN_PLACE``).
 """
 
 from __future__ import annotations
@@ -54,27 +54,12 @@ def _item_footprints(year: int) -> list[tuple[str, object]]:
     return footprints
 
 
-def stage_unit(
-    unit: dict | None = None,
-    year: int | None = None,
-    register_index: bool = True,
-) -> dict | None:
-    """Build (overwriting) the landcover footprint index for one year. ``register_index=False`` is
-    a no-op skip (this module's only product *is* the index)."""
+def stage_unit(unit: dict | None = None, year: int | None = None) -> dict | None:
+    """Build (overwriting) the landcover footprint index for one year."""
     year = (unit or {}).get("year", year) if unit else year
     if year is None:
         raise ValueError("iolulc.stage_unit requires a year (via unit['year'] or year=)")
 
-    uri = tile_index.index_uri(ASSET, year)
-    if not register_index:
-        return None
-
     footprints = _item_footprints(year)
-    tile_index.build_index(ASSET, footprints, year=year)
-    return {
-        "asset": ASSET,
-        "uri": uri,
-        "year": year,
-        "index_part": None,
-        "n_items": len(footprints),
-    }
+    uri = tile_index.build_index(ASSET, footprints, year=year)
+    return {"asset": ASSET, "uri": uri, "year": year, "n_items": len(footprints)}

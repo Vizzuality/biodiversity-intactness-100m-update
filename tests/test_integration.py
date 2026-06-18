@@ -36,15 +36,14 @@ def _assert_valid_cog(uri, dtype=None):
 def test_stage_worldpop_country(data_staged):
     unit = {"id": "ALB_2020", "iso3": "ALB", "year": 2020,
             "url": worldpop._url("ALB", 2020)}
-    result = worldpop.stage_unit(unit)
-
-    assert result is not None
-    _assert_valid_cog(result["uri"])
+    assert worldpop.stage_unit(unit) is True
+    dst = worldpop._dst("ALB", 2020)
+    _assert_valid_cog(dst)
 
     # Albania ~ (19.3, 39.6, 21.1, 42.7); a point inside it should hit the tile.
-    tile_index.consolidate("population", year=2020)
+    tile_index.index_cogs("population", year=2020)
     hits = tile_index.lookup("population", (20.0, 41.0, 20.1, 41.1), year=2020)
-    assert result["uri"] in hits
+    assert dst in hits
 
 
 def test_stage_sdpt_country(data_staged):
@@ -54,19 +53,18 @@ def test_stage_sdpt_country(data_staged):
     # the CRS and (being a small country) keeps this fast. The COG extent is read from the GDB
     # layer itself — units carry no bounds.
     unit = {"id": "slv", "region": "slv", "layer": "slv_plant_v21"}
-    result = sdpt.stage_unit(unit)
-    assert result is not None
-    arr = _assert_valid_cog(result["uri"], dtype="uint8")  # asserts the output COG is EPSG:4326
+    assert sdpt.stage_unit(unit) is True
+    dst = sdpt._dst("slv")
+    arr = _assert_valid_cog(dst, dtype="uint8")  # asserts the output COG is EPSG:4326
     assert set(np.unique(arr)).issubset({0, 1})
     assert arr.max() == 1  # some planted forest present (after reprojection from EPSG:3857)
-    assert result["year"] is None  # single-epoch
 
     # SDPT shares the forestManagement asset with FML; the index finds the staged tile.
-    tile_index.consolidate("forestManagement")
-    w, s, e, n = result["footprint"]
+    tile_index.index_cogs("forestManagement")
+    w, s, e, n = tile_index.cog_footprint(dst)
     mid = ((w + e) / 2, (s + n) / 2)
     hits = tile_index.lookup("forestManagement", (mid[0], mid[1], mid[0] + 0.01, mid[1] + 0.01))
-    assert result["uri"] in hits
+    assert dst in hits
 
 
 def test_stage_iolulc_index(data_staged):
@@ -103,16 +101,14 @@ def test_stage_roads_region(data_staged):
 def _check_roads_region():
     # Christmas Island — a tiny Geofabrik extract, fast to download + filter.
     unit = next(u for u in roads.list_units(regions=["christmas-island"]))
-    result = roads.stage_unit(unit)
-
-    assert result is not None
-    arr = _assert_valid_cog(result["uri"], dtype="uint8")
+    assert roads.stage_unit(unit) is True
+    dst = unit["dst"]
+    arr = _assert_valid_cog(dst, dtype="uint8")
     assert set(np.unique(arr)).issubset({0, 1})
     assert arr.max() == 1  # highways burned
-    assert result["year"] is None  # single-epoch
 
-    tile_index.consolidate("roads")
-    w, s, e, n = result["footprint"]
+    tile_index.index_cogs("roads")
+    w, s, e, n = tile_index.cog_footprint(dst)
     mid = ((w + e) / 2, (s + n) / 2)
     hits = tile_index.lookup("roads", (mid[0], mid[1], mid[0] + 0.01, mid[1] + 0.01))
-    assert result["uri"] in hits
+    assert dst in hits

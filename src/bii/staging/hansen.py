@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import requests
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "forestLoss"
@@ -46,14 +46,14 @@ def list_units(lats: list[str] | None = None, lons: list[str] | None = None) -> 
     ]
 
 
-def stage_unit(unit: dict, register_index: bool = True) -> dict | None:
+def stage_unit(unit: dict) -> bool:
     """Stage one Hansen 10deg tile (whole tile). A 404 is a valid ocean tile (no land) -> skip
-    (None); any other error propagates and fails the run."""
+    (``False``); any other error propagates and fails the run."""
     dst = _dst(unit["lat"], unit["lon"])
     try:
-        footprint = cog.translate_to_cog(unit["url"], dst, resampling="nearest")
+        cog.translate_to_cog(unit["url"], dst, resampling="nearest")
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-            return None
+            return False
         raise
-    return tile_index.finalize(ASSET, dst, footprint, None, register_index)
+    return True

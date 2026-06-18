@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import zipfile
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "accessibility"
@@ -30,10 +30,7 @@ def list_units() -> list[dict]:
     return [{"id": "global", "url": URL, "dst": _dst()}]
 
 
-def stage_unit(
-    unit: dict | None = None,
-    register_index: bool = True,
-) -> dict | None:
+def stage_unit(unit: dict | None = None) -> bool:
     unit = unit or {"url": URL}
     dst = _dst()
     # The DirectDownload URL serves a .zip (the GeoTIFF plus sidecars); read the tif via /vsizip.
@@ -41,7 +38,7 @@ def stage_unit(
     try:
         with zipfile.ZipFile(zip_path) as z:
             tif = next(n for n in z.namelist() if n.endswith(".tif"))
-        footprint = cog.translate_to_cog(f"/vsizip/{zip_path}/{tif}", dst, resampling="average")
+        cog.translate_to_cog(f"/vsizip/{zip_path}/{tif}", dst, resampling="average")
     finally:
         os.path.exists(zip_path) and os.remove(zip_path)
-    return tile_index.finalize(ASSET, dst, footprint, None, register_index)
+    return True

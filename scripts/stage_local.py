@@ -130,7 +130,7 @@ def main(argv=None) -> dict:
 
     stage.print_summary(items, pending)
     failed = stage._run_docker(pending, store=staged) if pending else []
-    # Skip consolidating any asset with a failed unit (incomplete footprint -> dropped land chunks).
+    # Skip rebuilding any asset with a failed unit (incomplete footprint -> dropped land chunks).
     incomplete = {(f["asset"], f["year"]) for f in failed}
     assets = {(it["asset"], it["year"]) for it in pending if it["dataset"] not in stage.INDEX_IN_PLACE}
     indexes = stage._consolidate(assets - incomplete)

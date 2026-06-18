@@ -11,7 +11,7 @@ staging unit, one Batch job, streamed in place via ``/vsicurl`` (Zenodo supports
 
 from __future__ import annotations
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "forestManagement"
@@ -30,11 +30,8 @@ def list_units() -> list[dict]:
     return [{"id": PROVIDER, "url": URL, "dst": _dst()}]
 
 
-def stage_unit(
-    unit: dict | None = None,
-    register_index: bool = True,
-) -> dict | None:
+def stage_unit(unit: dict | None = None) -> bool:
     unit = unit or {"url": URL}
     dst = _dst()
-    footprint = cog.translate_to_cog(unit["url"], dst, resampling="nearest")
-    return tile_index.finalize(ASSET, dst, footprint, None, register_index)
+    cog.translate_to_cog(unit["url"], dst, resampling="nearest")
+    return True

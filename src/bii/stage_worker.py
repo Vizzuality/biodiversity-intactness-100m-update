@@ -3,8 +3,9 @@
 One array index -> one manifest line. The orchestrator (:mod:`bii.stage`) builds the manifest and
 dispatches the containers; this module is the ``bii-stage-worker`` command that runs inside each
 one, staging a single unit. ``stage_unit`` always overwrites (the skip-if-exists decision lives in
-the orchestrator); a unit that legitimately produces nothing (an ocean Hansen tile 404s) returns
-``None`` and must not be treated as a failure to retry.
+the orchestrator) and returns whether it produced output — a unit that legitimately produces
+nothing (an ocean Hansen tile 404s) returns falsy and must not be treated as a failure to retry.
+The completion line is built here from the manifest, not plumbed up from ``stage_unit``.
 """
 
 from __future__ import annotations
@@ -16,13 +17,16 @@ from . import orchestrate
 from .staging import MODULES
 
 
-def worker(manifest_uri: str, index: int) -> dict | None:
-    """Stage line ``index`` of a staging manifest; ``None`` when the unit produced nothing."""
+def worker(manifest_uri: str, index: int) -> dict:
+    """Stage line ``index`` of a staging manifest; return a completion record built from the
+    manifest line plus whether the unit produced output (``staged``)."""
     item = orchestrate.read_manifest(manifest_uri)[index]
-    return MODULES[item["dataset"]].stage_unit(item["unit"])
+    staged = MODULES[item["dataset"]].stage_unit(item["unit"])
+    return {"dataset": item["dataset"], "id": item["unit"]["id"],
+            "dst": item["unit"]["dst"], "staged": bool(staged)}
 
 
-def worker_main(argv=None) -> dict | None:
+def worker_main(argv=None) -> dict:
     """Batch array / docker entrypoint: stage this index's unit. Reads ``BII_STAGE_MANIFEST`` and
     ``AWS_BATCH_JOB_ARRAY_INDEX`` (defaults to 0 for a one-off run) from the environment."""
     manifest = os.environ.get("BII_STAGE_MANIFEST")

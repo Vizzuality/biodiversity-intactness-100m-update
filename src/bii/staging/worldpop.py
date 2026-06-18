@@ -6,7 +6,7 @@ overviews use ``average``; the source nodata is preserved by the translate.
 
 from __future__ import annotations
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "population"
@@ -73,9 +73,9 @@ def list_units(
     ]
 
 
-def stage_unit(unit: dict, register_index: bool = True) -> dict:
+def stage_unit(unit: dict) -> bool:
     dst = _dst(unit["iso3"], unit["year"])
     # translate_to_cog downloads the GeoTIFF to disk before re-COG'ing (WorldPop's host has no HTTP
     # range support). A missing country/year raises and fails the run.
-    footprint = cog.translate_to_cog(unit["url"], dst, resampling="average")
-    return tile_index.finalize(ASSET, dst, footprint, unit["year"], register_index)
+    cog.translate_to_cog(unit["url"], dst, resampling="average")
+    return True

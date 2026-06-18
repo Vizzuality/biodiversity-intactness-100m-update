@@ -27,7 +27,7 @@ from contextlib import contextmanager
 
 import pyogrio
 
-from .. import config, tile_index
+from .. import config
 from . import cog
 
 ASSET = "forestManagement"
@@ -127,17 +127,14 @@ def _layer_bounds(path: str) -> tuple[float, float, float, float] | None:
     return tuple(tb) if info.get("features") and tb is not None else None
 
 
-def stage_unit(
-    unit: dict,
-    register_index: bool = True,
-) -> dict | None:
+def stage_unit(unit: dict) -> bool:
     layer = unit.get("layer") or _layer(unit["region"])
     dst = _dst(unit["region"])
     # Reproject the remote GDB layer to a local EPSG:4326 copy, then burn it onto the grid over the
-    # layer's own extent (read back from that copy). A layer with no polygons is skipped (None).
+    # layer's own extent (read back from that copy). A layer with no polygons is skipped (False).
     with _localized(_source_path(), layer) as local:
         extent = _layer_bounds(local)
         if extent is None:
-            return None
-        footprint = cog.rasterize_to_cog(local, dst, extent, layer="feat")
-    return tile_index.finalize(ASSET, dst, footprint, None, register_index)
+            return False
+        cog.rasterize_to_cog(local, dst, extent, layer="feat")
+    return True
