@@ -6,7 +6,6 @@ requires-python = ">=3.11"
 dependencies = [
     "requests",
     "numpy",
-    "scipy",
     "rasterio",
     "geopandas",
     "pyogrio",
@@ -23,6 +22,7 @@ dependencies = [
 process = [
     "cog_worker",
     "edt",
+    "opencv-python-headless",
     "rio-tiler",
 ]
 dev = [

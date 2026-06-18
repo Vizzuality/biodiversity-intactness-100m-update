@@ -19,9 +19,9 @@ and the landcover nodata masking are all carried over unchanged.
 
 from __future__ import annotations
 
+import cv2
 import edt
 import numpy as np
-from scipy import ndimage
 
 from . import config, tile_index
 
@@ -78,11 +78,11 @@ def nominal_scale(worker) -> float:
 
 
 def convolve(arr, radius, scale=1, dtype=float):
-    """Focal mean over a square window of side ``radius`` meters (``scipy.uniform_filter``)."""
+    """Focal mean over a square window of side ``radius`` meters (``cv2.blur``)."""
     if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
     kernel_size = round(radius / scale)
-    return ndimage.uniform_filter(arr.astype(dtype), kernel_size)[np.newaxis]
+    return cv2.blur(arr.astype(dtype), (kernel_size, kernel_size))[np.newaxis]
 
 
 def fast_distance_transform(arr):
