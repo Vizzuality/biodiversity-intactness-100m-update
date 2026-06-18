@@ -47,9 +47,9 @@ def _resolve_url(year: int) -> str:
     resp = requests.get(base, headers=_headers(), timeout=60)
     resp.raise_for_status()
     # Prefer the median masked composite (used in the whitepaper).
-    matches = re.findall(r'href="([^"]*median_masked\.tif\.gz)"', resp.text)
+    matches = re.findall(r'href="([^"]*median_masked(?:\.dat)?\.tif\.gz)"', resp.text)
     if not matches:
-        matches = re.findall(r'href="([^"]*median\.tif\.gz)"', resp.text)
+        matches = re.findall(r'href="([^"]*median(?:\.dat)?\.tif\.gz)"', resp.text)
     if not matches:
         raise FileNotFoundError(f"could not resolve VNL median URL for {year} at {base}")
     href = matches[0]

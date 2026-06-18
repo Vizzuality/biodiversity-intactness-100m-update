@@ -1,11 +1,14 @@
 """Stage Oxford MAP travel-time-to-cities (2015 accessibility surface) -> single global COG.
 
 Single-epoch: one snapshot reused across all years. Continuous minutes, so overviews use
-``average``. The Malaria Atlas DirectDownload URL serves the GeoTIFF; override
-:data:`URL` if a different epoch/friction-derived surface is used.
+``average``. The Malaria Atlas DirectDownload URL serves a .zip (GeoTIFF + sidecars), read
+via ``/vsizip``; override :data:`URL` if a different epoch/friction-derived surface is used.
 """
 
 from __future__ import annotations
+
+import os
+import zipfile
 
 from .. import config, tile_index
 from . import cog
@@ -33,5 +36,12 @@ def stage_unit(
 ) -> dict | None:
     unit = unit or {"url": URL}
     dst = _dst()
-    footprint = cog.translate_to_cog(unit["url"], dst, resampling="average")
+    # The DirectDownload URL serves a .zip (the GeoTIFF plus sidecars); read the tif via /vsizip.
+    zip_path = cog.fetch(unit["url"], suffix=".zip")
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            tif = next(n for n in z.namelist() if n.endswith(".tif"))
+        footprint = cog.translate_to_cog(f"/vsizip/{zip_path}/{tif}", dst, resampling="average")
+    finally:
+        os.path.exists(zip_path) and os.remove(zip_path)
     return tile_index.finalize(ASSET, dst, footprint, None, register_index)
