@@ -1,0 +1,14 @@
+# OSM roads staging image: the raster image + osmctools (osmconvert/osmfilter). roads.py shells
+# out to osmconvert/osmfilter to filter highways, then gdal_rasterize (already in the base) to
+# burn the 100 m mask. Build the `bii` image first, then:
+#   docker build -t bii-roads -f Dockerfile.roads .
+# BASE selects which raster image to layer on (push_images.sh passes the ECR-tagged build).
+ARG BASE=bii:latest
+FROM ${BASE}
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends osmctools \
+    && rm -rf /var/lib/apt/lists/*
+
+CMD ["bii-stage-worker"]

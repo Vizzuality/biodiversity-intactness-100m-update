@@ -200,7 +200,7 @@ def run(
 
     ``submit=False`` writes only the manifest — the size gate before any Batch spend. ``wait_fn`` is
     injectable so the loop can be driven synchronously in tests (defaults to :func:`wait_for_array`)."""
-    run_id = run_id or process.default_run_id()
+    run_id = run_id or config.RUN_ID
     wait_fn = wait_fn or wait_for_array
     chunks = chunk_manifest(manager, chunksize, coverage_assets=coverage_assets, coverage_year=coverage_year)
 
@@ -240,6 +240,10 @@ def main(argv=None) -> dict:
     result = run(manager, run_id=args.run_id, submit=not args.no_submit)
     print(json.dumps(result))
     return result
+
+
+def cli() -> None:  # console-script shim: discard the dict so ``sys.exit(cli())`` exits 0
+    main()
 
 
 if __name__ == "__main__":

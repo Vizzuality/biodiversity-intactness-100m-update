@@ -9,6 +9,8 @@ that dataset's module (``bii.staging.*``, or ``bii.tile_index`` for landcover/LU
 
 from __future__ import annotations
 
+import os
+
 # --------------------------------------------------------------------------------------
 # S3 layout
 # --------------------------------------------------------------------------------------
@@ -20,15 +22,17 @@ STAGED_PREFIX = "input_cogs"
 OUT_PREFIX = "out"
 
 
-# Roots for staged inputs and outputs. Default to S3; monkeypatch to a local directory to run
-# staging/processing entirely on local disk — used by tests and the single-unit local gate.
-STAGED_ROOT = f"s3://{BUCKET}/{STAGED_PREFIX}"
-OUT_ROOT = f"s3://{BUCKET}/{OUT_PREFIX}"
+# Roots for staged inputs and outputs. Default to S3; set ``BII_STAGED_ROOT`` / ``BII_OUT_ROOT``
+# (or assign the attribute) to a local directory to run staging/processing on local disk — env so
+# a docker/Batch container picks up the same root the host built the manifest with (the index-part
+# paths are derived from ``STAGED_ROOT`` at runtime inside the container).
+STAGED_ROOT = os.environ.get("BII_STAGED_ROOT", f"s3://{BUCKET}/{STAGED_PREFIX}")
+OUT_ROOT = os.environ.get("BII_OUT_ROOT", f"s3://{BUCKET}/{OUT_PREFIX}")
 
 # Run id: the sub-prefix under the output root segregating one processing run's COGs
 # (``out/<run_id>/...``) and its ``chunks.jsonl`` manifest. Operational, not analysis config —
-# override per run via the ``BII_RUN_ID`` env var (see :func:`bii.process.default_run_id`).
-RUN_ID = "v1"
+# override per run via the ``BII_RUN_ID`` env var.
+RUN_ID = os.environ.get("BII_RUN_ID", "v1_1")
 
 
 def _join(root: str, parts: tuple[str, ...]) -> str:
@@ -62,8 +66,8 @@ BUFFER = round(10000 / SCALE_METERS)
 # Year range. LULC + WorldPop + nightlights are per-year; the rest are single-epoch (one
 # snapshot reused across all years).
 # --------------------------------------------------------------------------------------
-START_YEAR = 2017
-END_YEAR = 2024
+START_YEAR = int(os.environ.get("BII_START_YEAR", 2017))
+END_YEAR = int(os.environ.get("BII_END_YEAR", 2024))
 
 
 def years() -> list[int]:

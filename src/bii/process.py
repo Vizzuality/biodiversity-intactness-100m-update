@@ -58,11 +58,6 @@ def output_uri(run_id: str, layer: str, worker: Worker) -> str:
     return config.out_uri(run_id, layer, f"{layer}_{_coord(north)}_{_coord(west)}.tif")
 
 
-def default_run_id() -> str:
-    """Run id for the output prefix — ``BII_RUN_ID`` (operational) overrides the config default."""
-    return os.environ.get("BII_RUN_ID") or config.RUN_ID
-
-
 # --------------------------------------------------------------------------------------
 # COG persistence (ports notebook 3's persist_cog; S3 or local)
 # --------------------------------------------------------------------------------------
@@ -89,7 +84,7 @@ def process(chunk: dict, run_id: str | None = None, *, skip_existing: bool = Tru
     ``chunk`` is a ``cog_worker`` ``chunk_params()`` dict. Idempotent: if every output already
     exists the reads + compute are skipped entirely; otherwise only missing layers are written.
     """
-    run_id = run_id or default_run_id()
+    run_id = run_id or config.RUN_ID
     worker = Worker(**chunk)
     result = {"run_id": run_id, "bounds": list(worker.bounds), "complete": True}
 
@@ -128,9 +123,13 @@ def main(argv=None) -> dict:
         raise SystemExit("BII_CHUNKS_URI must point at the chunks.jsonl manifest")
     index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
     chunk = load_chunk(manifest, index)
-    result = process(chunk, run_id=default_run_id())
+    result = process(chunk)
     print(json.dumps(result))
     return result
+
+
+def cli() -> None:  # console-script shim: discard the dict so ``sys.exit(cli())`` exits 0
+    main()
 
 
 if __name__ == "__main__":

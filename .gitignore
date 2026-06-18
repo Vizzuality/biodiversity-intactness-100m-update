@@ -9,8 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-# Data files
-data/
+# Data files (output/staged root only; vendored package data under scripts/ and src/ is tracked)
+/data/
 
 # Local env (credentials + per-run pointers)
 .env

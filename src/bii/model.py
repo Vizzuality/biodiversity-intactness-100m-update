@@ -19,7 +19,7 @@ and the landcover nodata masking are all carried over unchanged.
 
 from __future__ import annotations
 
-import mahotas
+import edt
 import numpy as np
 from scipy import ndimage
 
@@ -86,10 +86,10 @@ def convolve(arr, radius, scale=1, dtype=float):
 
 
 def fast_distance_transform(arr):
-    """Euclidean distance (in pixels) to the nearest truthy cell, via ``mahotas.distance``."""
+    """Squared Euclidean distance (px^2) to the nearest truthy cell, via ``edt``."""
     if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
-    return mahotas.distance(np.logical_not(arr))[np.newaxis]
+    return edt.edtsq(np.logical_not(arr))[np.newaxis]
 
 
 # --------------------------------------------------------------------------------------

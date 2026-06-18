@@ -96,11 +96,3 @@ def test_load_chunk_reads_nth_line(tmp_path):
 
     assert process.load_chunk(str(manifest), 0)["proj_bounds"][0] == -86.0
     assert process.load_chunk(str(manifest), 2)["proj_bounds"][0] == -84.0
-
-
-def test_default_run_id_env_override(monkeypatch):
-    monkeypatch.setattr(config, "RUN_ID", "cfg-default")
-    monkeypatch.delenv("BII_RUN_ID", raising=False)
-    assert process.default_run_id() == "cfg-default"
-    monkeypatch.setenv("BII_RUN_ID", "run-42")
-    assert process.default_run_id() == "run-42"

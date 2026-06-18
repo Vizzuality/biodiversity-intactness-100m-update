@@ -22,7 +22,7 @@ dependencies = [
 # Processing/model deps (parts 3-4). Kept optional so the staging image stays lean.
 process = [
     "cog_worker",
-    "mahotas",
+    "edt",
     "rio-tiler",
 ]
 dev = [
@@ -32,9 +32,10 @@ dev = [
 ]
 
 [project.scripts]
-bii-stage = "bii.cli:stage_main"
-bii-process = "bii.process:main"
-bii-run = "bii.orchestrate:main"
+bii-stage = "bii.stage:cli"
+bii-stage-worker = "bii.stage_worker:worker_cli"
+bii-process = "bii.process:cli"
+bii-run = "bii.orchestrate:cli"
 
 [build-system]
 requires = ["hatchling"]
