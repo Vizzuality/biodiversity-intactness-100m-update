@@ -27,6 +27,7 @@ process = [
 ]
 dev = [
     "jupyter",
+    "matplotlib",
     "pytest",
     "rio-cogeo",  # cog_validate, used only by the test suite
 ]
