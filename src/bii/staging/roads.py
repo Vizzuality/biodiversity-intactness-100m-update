@@ -9,7 +9,7 @@ burn-1 mask on the BII grid.
 Highway filtering is done by **osmctools** (``osmconvert`` | ``osmfilter``), the only backend —
 it shrinks a region extract to just the highways we keep before GDAL reads it, and applies the
 sub-type/tunnel drops (footpaths, cycleways, tracks, ...) that the GDAL OSM driver's bare
-``highway IS NOT NULL`` could not. Both tools must be on ``PATH`` (see ``Dockerfile.roads``);
+``highway IS NOT NULL`` could not. Both tools must be on ``PATH`` (see ``Dockerfile``);
 :func:`stage_unit` raises if they're missing. The filter set (:data:`OSM_HIGHWAY_DROP_VALUES`,
 :data:`OSM_DROP_TUNNELS`) mirrors the rasterize-osm notebook's osmfilter pass. The filtered
 ``.osm.pbf`` is handed straight to
@@ -110,7 +110,7 @@ def _require_osmctools() -> None:
     if missing:
         raise RuntimeError(
             f"roads staging requires osmctools but {', '.join(missing)} not on PATH; "
-            "install osmctools (see Dockerfile.roads)."
+            "install osmctools (see Dockerfile)."
         )
 
 

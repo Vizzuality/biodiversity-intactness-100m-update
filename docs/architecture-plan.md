@@ -62,8 +62,7 @@ scripts/
   stage.py             # thin CLI -> bii.staging (run locally or submit to Batch)
   test_chunk.py        # run ONE chunk end-to-end locally
   run.py               # thin CLI -> bii.orchestrate (submit + verify global processing run)
-Dockerfile             # geo base (GDAL/rasterio) + deps; staging, processing, local test
-Dockerfile.roads       # osmctools base + gdal-bin: OSM filter + rasterize only
+Dockerfile             # geo base (GDAL/rasterio) + osmctools + deps; staging, processing, local test
 ```
 
 `pyproject.toml`: switch to `src/` layout (`[tool.setuptools] packages` / hatchling), add
@@ -93,14 +92,13 @@ the orchestrator can fan out as Batch jobs (one per tile/country/year).
 Notes:
 - **Vector sources (SDPT, OSM)** can't be pure-streamed; their one-time rasterization runs
   as a Batch staging job using ephemeral disk (acceptable — not a local bulk download).
-- **`roads` runs in its own image (`Dockerfile.roads`)**, adapted from the `rasterize-osm`
-  POC: download per Geofabrik child region (vendored `geofabrik-index-v1-child.geojson` as the
-  fan-out manifest, one array index per region), `osmconvert`/`osmfilter` highway filter,
-  `gdal_rasterize -burn 1` at the BII grid (`EPSG:4326`, `100/111319.49`°), translate to COG,
-  register footprint. osmctools is much faster than osmium but awkward to build into the
-  python-gdal base, hence the dedicated image. Per-region COGs (variable extent) are mosaicked
-  on the fly by cog_worker during the windowed chunk read; the footprint index handles overlap.
-  Single-epoch — one recent snapshot reused across all years.
+- **`roads`** is adapted from the `rasterize-osm` POC: download per Geofabrik child region
+  (vendored `geofabrik-index-v1-child.geojson` as the fan-out manifest, one array index per
+  region), `osmconvert`/`osmfilter` highway filter, `gdal_rasterize -burn 1` at the BII grid
+  (`EPSG:4326`, `100/111319.49`°), translate to COG, register footprint. osmctools is much faster
+  than osmium; it's ~1 MB so it lives in the shared image rather than a dedicated one. Per-region
+  COGs (variable extent) are mosaicked on the fly by cog_worker during the windowed chunk read;
+  the footprint index handles overlap. Single-epoch — one recent snapshot reused across all years.
 - **forestManagement normalization:** both FML and SDPT are staged into a comparable
   **managed-forest mask/fraction** so the model is provider-agnostic. The notebook's FML
   decode (`>30 & <55`) moves into `staging/forest_management.py`; `staging/sdpt.py` emits a
@@ -159,14 +157,12 @@ Ports `_cog_worker_run` track/retry to Batch; reused for both staging and proces
 3. **Verify + retry:** list S3 `out/<run_id>/...`, diff vs manifest; **missing keys = retry set**
    -> resubmit only those indices; loop until empty.
 
-## Dockerfile(s)
+## Dockerfile
 
-- **`Dockerfile`** — base on a GDAL/rasterio image (`osgeo/gdal` or `ghcr.io/lambgeo/...`),
-  `pip install -e .` + deps. One image for processing jobs, the local test, and all
-  *raster* staging (Hansen, WorldPop, VNL, travel time, FML, SDPT).
-- **`Dockerfile.roads`** — separate image for OSM roads only: `FROM ramunasd/osmctools`
-  (or equiv) + `apt install gdal-bin`, then layer the `bii` package. Keeps the proven fast
-  osmctools filter pipeline rather than compiling osmctools into the python-gdal base.
+- **`Dockerfile`** — GDAL/rasterio base (`osgeo/gdal`) + `apt install osmctools` (for the roads
+  highway filter) + `uv pip install .[process]`. One image for processing jobs, the local test,
+  and all staging (Hansen, WorldPop, VNL, travel time, FML, SDPT, roads). osmctools is ~1 MB on
+  top of the geo base, so a single image is cheaper than maintaining a separate roads image.
 
 ## Verification
 

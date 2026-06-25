@@ -14,7 +14,7 @@ Staging runs through ``bii.stage``'s docker executor — the same manifest + arr
 contract as AWS Batch, with a bind-mounted local dir standing in for the S3 store:
 
     python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --staged ./data/staged_local
-    python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --build   # build images first
+    python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --build   # build image first
 """
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def main(argv=None) -> dict:
     p.add_argument("--countries", nargs="*", help="ISO3 override for worldpop (default: from bbox table)")
     p.add_argument("--regions", nargs="*", help="region override for sdpt (default: from bbox table)")
     p.add_argument("--dataset", choices=sorted(stage.MODULES), help="stage only this dataset (default: all)")
-    p.add_argument("--build", action="store_true", help="docker build the bii / bii-roads images first")
+    p.add_argument("--build", action="store_true", help="docker build the bii image first")
     p.add_argument("--overwrite", action="store_true", help="restage units whose output already exists")
     p.add_argument("--dry-run", action="store_true", help="list the AOI-selected units and exit")
     args = p.parse_args(argv)
@@ -126,7 +126,6 @@ def main(argv=None) -> dict:
 
     if args.build:
         subprocess.run(["docker", "build", "-t", "bii", "-f", "Dockerfile", "."], check=True)
-        subprocess.run(["docker", "build", "-t", "bii-roads", "-f", "Dockerfile.roads", "."], check=True)
 
     stage.print_summary(items, pending)
     failed = stage._run_docker(pending, store=staged) if pending else []

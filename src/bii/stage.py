@@ -5,9 +5,8 @@ missing (or all, with ``overwrite``), and rebuilds each fully-staged asset's foo
 its staged COGs. Two executors run the same per-unit work over the same per-image manifests +
 ``AWS_BATCH_JOB_ARRAY_INDEX`` contract, so a local docker run exercises exactly what Batch will:
 
-* ``docker`` — ``docker run`` one container per unit (default; test the images locally; roads uses
-  the osmctools image, everything else the raster image).
-* ``batch``  — submit the manifest as an AWS Batch array job (one job per image group).
+* ``docker`` — ``docker run`` one container per unit (default; test the image locally).
+* ``batch``  — submit the manifest as an AWS Batch array job.
 
 Both dispatch the ``bii-stage-worker`` entrypoint in :mod:`bii.stage_worker`. A thin driver over
 :mod:`bii.staging`: each module exposes ``list_units`` / ``stage_unit`` and carries ``dst`` +
@@ -29,8 +28,6 @@ import sys
 from . import config, orchestrate, s3io, tile_index
 from .staging import MODULES
 
-# Datasets whose container needs osmctools (the roads image); everything else uses the raster image.
-ROADS_DATASETS = ("roads",)
 # landcover builds its index in place (STAC hrefs, no COGs) -> rebuild-exempt.
 INDEX_IN_PLACE = ("iolulc",)
 # Host env forwarded into docker containers (S3 creds + staging tokens; -e NAME passes the value).
@@ -72,8 +69,8 @@ def print_summary(items: list[dict], pending: list[dict]) -> None:
           f"({len(items) - len(pending)} skipped, already staged)", file=sys.stderr)
 
 
-def _manifest_uri(group: str) -> str:
-    return config.out_uri("stage", f"{group}.jsonl")
+def _manifest_uri() -> str:
+    return config.out_uri("stage", "manifest.jsonl")
 
 
 # --------------------------------------------------------------------------------------
@@ -83,20 +80,6 @@ def _failure(it: dict, error: str) -> dict:
     """One not-completed task for the run report (also drives the incomplete-index skip)."""
     return {"dataset": it["dataset"], "id": it["unit"]["id"],
             "asset": it["asset"], "year": it["year"], "error": error}
-
-
-def _group(dataset: str) -> str:
-    return "roads" if dataset in ROADS_DATASETS else "main"
-
-
-def _groups(items: list[dict]) -> dict[str, list[dict]]:
-    """``items`` grouped by container image (``main`` raster vs ``roads`` osmctools), preserving
-    order. Both executors stage one group per image against its own manifest, so the worker's
-    ``AWS_BATCH_JOB_ARRAY_INDEX`` is the line within the group — identical across docker and Batch."""
-    groups: dict[str, list[dict]] = {}
-    for it in items:
-        groups.setdefault(_group(it["dataset"]), []).append(it)
-    return groups
 
 
 def docker_run(image: str, command: list[str], *, env: dict | None = None,
@@ -122,23 +105,20 @@ def docker_run(image: str, command: list[str], *, env: dict | None = None,
 
 def _run_docker(items: list[dict], store: str | None = None) -> list[dict]:
     """Run ``bii-stage-worker`` in one ``docker run`` per unit — the local mirror of the Batch array,
-    over the same per-image manifests. The image group selects ``BII_STAGE_IMAGE`` /
-    ``BII_STAGE_ROADS_IMAGE``; without ``store`` the container reads the manifest from S3 with the
-    forwarded creds, with it from the bind-mounted local store. Continues past a container that
-    exits non-zero; returns the failed items."""
-    images = {"main": os.environ.get("BII_STAGE_IMAGE", "bii"),
-              "roads": os.environ.get("BII_STAGE_ROADS_IMAGE", "bii-roads")}
+    over the same manifest. The image is ``BII_STAGE_IMAGE``; without ``store`` the container reads
+    the manifest from S3 with the forwarded creds, with it from the bind-mounted local store.
+    Continues past a container that exits non-zero; returns the failed items."""
+    image = os.environ.get("BII_STAGE_IMAGE", "bii")
+    muri = orchestrate.write_manifest(items, _manifest_uri())
     failed: list[dict] = []
-    for key, group_items in _groups(items).items():
-        muri = orchestrate.write_manifest(group_items, _manifest_uri(key))
-        for i, it in enumerate(group_items):
-            print(f"[{key} {i + 1}/{len(group_items)}] {it['dataset']} {it['unit']['id']}", file=sys.stderr)
-            try:
-                docker_run(images[key], ["bii-stage-worker"], store=store,
-                           env={"BII_STAGE_MANIFEST": muri, "AWS_BATCH_JOB_ARRAY_INDEX": i})
-            except subprocess.CalledProcessError as exc:
-                tail = "\n".join((exc.output or "").strip().splitlines()[-15:]) or str(exc)
-                failed.append(_failure(it, tail))
+    for i, it in enumerate(items):
+        print(f"[{i + 1}/{len(items)}] {it['dataset']} {it['unit']['id']}", file=sys.stderr)
+        try:
+            docker_run(image, ["bii-stage-worker"], store=store,
+                       env={"BII_STAGE_MANIFEST": muri, "AWS_BATCH_JOB_ARRAY_INDEX": i})
+        except subprocess.CalledProcessError as exc:
+            tail = "\n".join((exc.output or "").strip().splitlines()[-15:]) or str(exc)
+            failed.append(_failure(it, tail))
     return failed
 
 
@@ -187,26 +167,23 @@ def _failed_children(job_id: str, client=None) -> dict[int, str]:
 
 
 def _run_batch(items: list[dict], *, client=None, wait_fn=None) -> list[dict]:
-    """Submit one Batch array job per image group (roads vs raster), wait for each, and return the
-    units whose child ended FAILED after retries — parity with the docker executor's non-zero-exit
-    failures. Queue + job defs come from ``BII_BATCH_QUEUE`` / ``BII_BATCH_JOB_DEF`` /
-    ``BII_BATCH_ROADS_JOB_DEF``. Spot resilience is Batch's own ``retryStrategy``; a unit that
-    produces nothing exits 0, not failed."""
+    """Submit the manifest as a single Batch array job, wait for it, and return the units whose child
+    ended FAILED after retries — parity with the docker executor's non-zero-exit failures. Queue +
+    job def come from ``BII_BATCH_QUEUE`` / ``BII_BATCH_JOB_DEF``. Spot resilience is Batch's own
+    ``retryStrategy``; a unit that produces nothing exits 0, not failed."""
     queue = os.environ.get("BII_BATCH_QUEUE")
     if not queue:
         raise SystemExit("set BII_BATCH_QUEUE")
+    job_def = os.environ.get("BII_BATCH_JOB_DEF")
+    if not job_def:
+        raise SystemExit("set BII_BATCH_JOB_DEF")
     wait_fn = wait_fn or orchestrate.wait_for_array
-    defs = {"main": os.environ.get("BII_BATCH_JOB_DEF"), "roads": os.environ.get("BII_BATCH_ROADS_JOB_DEF")}
-    failed: list[dict] = []
-    for key, group_items in _groups(items).items():
-        if not defs[key]:
-            raise SystemExit(f"set BII_BATCH_{'ROADS_' if key == 'roads' else ''}JOB_DEF for the {key} group")
-        muri = orchestrate.write_manifest(group_items, _manifest_uri(key))
-        job_id = submit_array(muri, len(group_items), queue, defs[key], f"bii-stage-{key}", client=client)
-        if wait_fn(job_id, client=client) == "FAILED":  # a non-array job (size 1) is just index 0
-            detail = {0: "batch job failed"} if len(group_items) == 1 else _failed_children(job_id, client)
-            failed += [_failure(group_items[i], detail[i]) for i in sorted(detail)]
-    return failed
+    muri = orchestrate.write_manifest(items, _manifest_uri())
+    job_id = submit_array(muri, len(items), queue, job_def, "bii-stage", client=client)
+    if wait_fn(job_id, client=client) == "FAILED":  # a non-array job (size 1) is just index 0
+        detail = {0: "batch job failed"} if len(items) == 1 else _failed_children(job_id, client)
+        return [_failure(items[i], detail[i]) for i in sorted(detail)]
+    return []
 
 
 def _consolidate(assets) -> list[str]:
@@ -254,8 +231,8 @@ def run(dataset: str | None = None, year: int | None = None, *, executor: str = 
 
 
 def main(argv=None) -> dict:
-    """``scripts/stage.py`` / ``bii-stage`` entrypoint. Batch queue/job-defs and docker image names
-    come from the environment (``BII_BATCH_*`` / ``BII_STAGE_*``), like the rest of the pipeline."""
+    """``scripts/stage.py`` / ``bii-stage`` entrypoint. Batch queue/job-def and the docker image name
+    come from the environment (``BII_BATCH_*`` / ``BII_STAGE_IMAGE``), like the rest of the pipeline."""
     parser = argparse.ArgumentParser(description="Stage BII input datasets and consolidate their indexes.")
     parser.add_argument("--dataset", choices=sorted(MODULES), help="stage only this dataset (default: all)")
     parser.add_argument("--year", type=int, help="stage only this year (per-year datasets only)")

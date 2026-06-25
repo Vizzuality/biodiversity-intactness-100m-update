@@ -79,13 +79,13 @@ def test_manifest_items_records_asset_for_consolidation(stub):
 
 
 def test_worker_dispatches_to_module_by_manifest_line(stub, local_roots):
-    uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri("t"))
+    uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
     result = stage_worker.worker(uri, 1)  # line 1 -> second unit
     assert result["dst"] == "s3://b/fake/u2.tif" and result["staged"] and stub.staged == ["u2"]
 
 
 def test_worker_main_reads_env(stub, local_roots, monkeypatch):
-    uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri("t"))
+    uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
     monkeypatch.setenv("BII_STAGE_MANIFEST", uri)
     monkeypatch.setenv("AWS_BATCH_JOB_ARRAY_INDEX", "0")
     assert stage_worker.worker_main()["dst"] == "s3://b/fake/u1.tif"
@@ -100,9 +100,8 @@ def test_worker_main_requires_manifest(monkeypatch):
 # --------------------------------------------------------------------------------------
 # docker executor
 # --------------------------------------------------------------------------------------
-def test_run_docker_one_container_per_unit_with_per_image_group(stub, local_roots, monkeypatch):
+def test_run_docker_one_container_per_unit(stub, local_roots, monkeypatch):
     monkeypatch.setenv("BII_STAGE_IMAGE", "img")
-    monkeypatch.setenv("BII_STAGE_ROADS_IMAGE", "roadsimg")
     calls = []
     monkeypatch.setattr(stage.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
@@ -113,9 +112,9 @@ def test_run_docker_one_container_per_unit_with_per_image_group(stub, local_root
     result = stage.run("fake", executor="docker")
 
     assert len(calls) == 2 and result["failed"] == []
-    # one image group per dataset; the array index is the line *within* the group (mirrors Batch).
-    assert "img" in calls[0] and "roadsimg" in calls[1]
-    assert "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[0] and "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[1]
+    # one image for all units; the array index is the manifest line (mirrors Batch).
+    assert "img" in calls[0] and "img" in calls[1]
+    assert "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[0] and "AWS_BATCH_JOB_ARRAY_INDEX=1" in calls[1]
     assert calls[0][-1] == "bii-stage-worker"
 
 
@@ -152,10 +151,9 @@ def test_submit_array_single_is_not_array():
     assert "arrayProperties" not in fake.submissions[0]
 
 
-def test_run_batch_submits_one_job_per_image_group(stub, local_roots, monkeypatch):
+def test_run_batch_submits_one_array_for_all_units(stub, local_roots, monkeypatch):
     monkeypatch.setenv("BII_BATCH_QUEUE", "q")
-    monkeypatch.setenv("BII_BATCH_JOB_DEF", "raster-jd")
-    monkeypatch.setenv("BII_BATCH_ROADS_JOB_DEF", "roads-jd")
+    monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
     fake = _FakeBatch()
     items = _items(("fake", "u1", "s3://b/fake/u1.tif", "fake"),
                    ("fake", "u2", "s3://b/fake/u2.tif", "fake"),
@@ -165,7 +163,7 @@ def test_run_batch_submits_one_job_per_image_group(stub, local_roots, monkeypatc
     stage.run("fake", executor="batch", client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
 
     defs = [kw["jobDefinition"] for kw in fake.submissions]
-    assert defs == ["raster-jd", "roads-jd"]  # one array per image group: main then roads
+    assert defs == ["jd"]  # a single array job for every unit, roads included
     # landcover would be index-in-place; here both assets consolidate.
     assert ("fake", None) in stub.consolidated and ("roads", None) in stub.consolidated
 
@@ -187,10 +185,9 @@ def test_run_batch_reports_failed_children_and_skips_their_index(stub, local_roo
     assert stub.consolidated == [] and result["indexes"] == []
 
 
-def test_run_batch_requires_roads_job_def_when_roads_present(stub, local_roots, monkeypatch):
+def test_run_batch_requires_job_def(stub, local_roots, monkeypatch):
     monkeypatch.setenv("BII_BATCH_QUEUE", "q")
-    monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
-    monkeypatch.delenv("BII_BATCH_ROADS_JOB_DEF", raising=False)
+    monkeypatch.delenv("BII_BATCH_JOB_DEF", raising=False)
     items = _items(("roads", "r1", "s3://b/roads/r1.tif", "roads"))
     monkeypatch.setattr(stage, "_pending", lambda its: items)
     with pytest.raises(SystemExit):

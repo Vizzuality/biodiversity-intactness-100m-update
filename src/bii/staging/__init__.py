@@ -17,7 +17,7 @@ dict.)
 
 Raster streaming: hansen, worldpop, nightlights, travel_time, fml.
 Vector rasterization (ephemeral disk): sdpt (a forestManagement provider alongside fml),
-roads (highway mask; requires osmctools, e.g. in Dockerfile.roads).
+roads (highway mask; requires osmctools, e.g. in Dockerfile).
 Index-only (no pixels moved): iolulc (landcover) records IO STAC hrefs in place.
 """
 
