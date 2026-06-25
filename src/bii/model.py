@@ -77,8 +77,12 @@ def nominal_scale(worker) -> float:
     return worker.scale
 
 
-def convolve(arr, radius, scale=1, dtype=float):
-    """Focal mean over a square window of side ``radius`` meters (``cv2.blur``)."""
+def convolve(arr, radius, scale=1, dtype=np.float32):
+    """Focal mean over a square window of side ``radius`` meters (``cv2.blur``).
+
+    float32 (not float64) output: the focal predictors dominate the model's memory, and the BII
+    is written as float32 anyway, so the extra precision is discarded — the result moves by at
+    most ~1e-6, well within tolerance."""
     if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
     kernel_size = round(radius / scale)
@@ -147,7 +151,7 @@ def calc_bii(worker, layers: dict | None = None, year: int = config.START_YEAR, 
     distRoads = np.sqrt(fast_distance_transform(layers["roads"])) * scale
     distRoads = np.clip(distRoads, 0, 10000)
     ln_distRoads = np.log(distRoads + 1)
-    accessibility = np.clip(layers["accessibility"].data, 0, 1440)
+    accessibility = np.clip(layers["accessibility"].data, 0, 1440).astype(np.float32)
     ln_accessibility = np.log(accessibility + 1)
     ln_nightlights = np.log(layers["nightlights"] + 1).data
     population = np.nan_to_num(np.ma.filled(layers["population"], 0), 0)
@@ -157,38 +161,40 @@ def calc_bii(worker, layers: dict | None = None, year: int = config.START_YEAR, 
     nodata = ~(layers["landcover"].data > 1)
 
     predictors = {
-        "ln_distRoads": ln_distRoads,
-        "ln_accessibility": ln_accessibility,
-        "ln_nL2012_1000m": convolve(ln_nightlights, 2000, scale),
-        "ln_pD2006_1000m": convolve(ln_population, 2000, scale),
-        "forestManagement_100m": convolve(forestManagement, 200, scale),
-        "lcCrops_1000m": convolve(crops, 2000, scale),
-        "lcCrops_100m": convolve(crops, 200, scale),
-        "lcBuiltArea_1000m": convolve(builtArea, 2000, scale),
-        "lcBuiltArea_100m": convolve(builtArea, 200, scale),
-        "forestLoss2006_100m": convolve(forestLoss, 200, scale),
-        "Intercept": 1,
+        "ln_distRoads": lambda: ln_distRoads,
+        "ln_accessibility": lambda: ln_accessibility,
+        "ln_nL2012_1000m": lambda: convolve(ln_nightlights, 2000, scale),
+        "ln_pD2006_1000m": lambda: convolve(ln_population, 2000, scale),
+        "forestManagement_100m": lambda: convolve(forestManagement, 200, scale),
+        "lcCrops_1000m": lambda: convolve(crops, 2000, scale),
+        "lcCrops_100m": lambda: convolve(crops, 200, scale),
+        "lcBuiltArea_1000m": lambda: convolve(builtArea, 2000, scale),
+        "lcBuiltArea_100m": lambda: convolve(builtArea, 200, scale),
+        "forestLoss2006_100m": lambda: convolve(forestLoss, 200, scale),
+        "Intercept": lambda: 1,
     }
 
-    abundance_max = INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](
+    abundance_max = float(INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](
         ABUNDANCE_COEFFICIENTS["Intercept"]
         + ABUNDANCE_COEFFICIENTS.get("ln_accessibility", 0) * np.log(1440)
         + ABUNDANCE_COEFFICIENTS.get("ln_distRoads", 0) * np.log(10000)
-    )
-    # Element-wise weighted sum over predictors. Builtin sum() (not np.sum) reduces via ``+`` so
-    # the scalar Intercept term broadcasts against the (1,H,W) predictor arrays — np.sum on the
-    # mixed-shape list raises on modern numpy (the notebook relied on the old object-array path).
-    abundance = sum(predictors[k] * v for k, v in ABUNDANCE_COEFFICIENTS.items())
-    abundance = INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](abundance) / abundance_max
-
-    community_similarity_max = INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](
+    ))
+    community_similarity_max = float(INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](
         COMMUNITY_SIMILARITY_COEFFICIENTS["Intercept"]
         + COMMUNITY_SIMILARITY_COEFFICIENTS.get("ln_accessibility", 0) * np.log(1440)
         + COMMUNITY_SIMILARITY_COEFFICIENTS.get("ln_distRoads", 0) * np.log(10000)
-    )
-    community_similarity = sum(
-        predictors[k] * v for k, v in COMMUNITY_SIMILARITY_COEFFICIENTS.items()
-    )
+    ))
+
+    abundance = community_similarity = 0.0
+    for name, predictor in predictors.items():
+        p = predictor()
+        if name in ABUNDANCE_COEFFICIENTS:
+            abundance = abundance + p * ABUNDANCE_COEFFICIENTS[name]
+        if name in COMMUNITY_SIMILARITY_COEFFICIENTS:
+            community_similarity = community_similarity + p * COMMUNITY_SIMILARITY_COEFFICIENTS[name]
+        del p
+
+    abundance = INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](abundance) / abundance_max
     community_similarity = (
         INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](community_similarity)
         / community_similarity_max
@@ -202,7 +208,7 @@ def calc_bii(worker, layers: dict | None = None, year: int = config.START_YEAR, 
     }
 
     if return_all:
-        return layers | predictors | results
+        return layers | {k: f() for k, f in predictors.items()} | results
     return results
 
 
