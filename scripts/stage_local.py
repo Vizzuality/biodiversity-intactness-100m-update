@@ -56,8 +56,7 @@ def _roads_ids(aoi) -> set:
 
 def _wrap(name: str, units: list[dict]) -> list[dict]:
     """Wrap a module's units as orchestrator manifest items ``{dataset, unit, asset, year}``."""
-    mod = stage.MODULES[name]
-    return [{"dataset": name, "unit": u, "asset": mod.ASSET, "year": u.get("year")} for u in units]
+    return [stage.manifest_item(name, u) for u in units]
 
 
 def _aoi_items(datasets, year, aoi, cbounds, countries, regions, road_ids) -> list[dict]:
@@ -116,9 +115,9 @@ def main(argv=None) -> dict:
     datasets = [args.dataset] if args.dataset else list(stage.MODULES)
 
     items = _aoi_items(datasets, args.year, aoi, cbounds, countries, regions, road_ids)
-    pending = items if args.overwrite else stage._pending(items)
 
     if args.dry_run:
+        pending = items if args.overwrite else stage._pending(items)
         result = {"staged_root": staged, "planned": len(items), "pending": len(pending),
                   "units": [{"dataset": it["dataset"], "id": it["unit"]["id"]} for it in items]}
         print(json.dumps(result))
@@ -127,16 +126,8 @@ def main(argv=None) -> dict:
     if args.build:
         subprocess.run(["docker", "build", "-t", "bii", "-f", "Dockerfile", "."], check=True)
 
-    stage.print_summary(items, pending)
-    failed = stage.run_docker(pending, store=staged) if pending else []
-    # Skip rebuilding any asset with a failed unit (incomplete footprint -> dropped land chunks).
-    incomplete = {(f["asset"], f["year"]) for f in failed}
-    assets = {(it["asset"], it["year"]) for it in pending if it["dataset"] not in stage.INDEX_IN_PLACE}
-    indexes = stage._consolidate(assets - incomplete)
-
-    result = {"staged_root": staged, "planned": len(items), "pending": len(pending),
-              "indexes": indexes, "failed": failed,
-              "incomplete_indexes": sorted(incomplete & assets, key=lambda a: (a[0], a[1] or 0))}
+    result = {"staged_root": staged,
+              **stage.run(items=items, executor="docker", overwrite=args.overwrite, store=staged)}
     print(json.dumps(result))
     return result
 

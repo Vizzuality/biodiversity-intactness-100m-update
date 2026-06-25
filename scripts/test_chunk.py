@@ -50,7 +50,7 @@ def main(argv=None) -> dict:
 
     muri = orchestration.write_manifest([chunk], config.out_uri(run_id, "chunks.jsonl"))
     orchestration.docker_run("bii", ["bii-process"], store=store, env={
-        "BII_CHUNKS_URI": muri, "BII_RUN_ID": run_id,
+        "BII_MANIFEST": muri, "BII_RUN_ID": run_id,
         "BII_START_YEAR": config.START_YEAR, "BII_END_YEAR": config.END_YEAR,
         "AWS_BATCH_JOB_ARRAY_INDEX": 0,
     })

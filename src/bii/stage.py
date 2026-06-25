@@ -3,13 +3,14 @@
 Enumerates every staging unit (one COG/tile/year per dataset), stages the ones whose output is
 missing (or all, with ``overwrite``) via :mod:`bii.orchestration`'s docker/Batch executors, and
 rebuilds each fully-staged asset's footprint index from its staged COGs. Both executors dispatch the
-``bii-stage-worker`` entrypoint in :mod:`bii.stage_worker`.
+``bii-stage-worker`` entrypoint (:func:`stage`) in this module — driver + worker together, mirroring
+:mod:`bii.process`.
 
 A thin driver over :mod:`bii.staging`: each module exposes ``list_units`` / ``stage_unit`` and carries
-``dst`` + ``ASSET``, so this module stays dataset-agnostic. The skip-if-exists decision lives here;
-the per-unit staging lives in the worker. A unit that legitimately produces nothing (an ocean Hansen
-tile 404s) exits 0 and is not a failure; one whose worker exits non-zero (docker) or whose Batch child
-ends FAILED after retries is reported, and its asset's index is left unrebuilt.
+``dst`` + ``ASSET``, so this module stays dataset-agnostic. The skip-if-exists decision lives in the
+driver; the per-unit staging lives in :func:`stage`. A unit that legitimately produces nothing (an
+ocean Hansen tile 404s) exits 0 and is not a failure; one whose worker exits non-zero (docker) or
+whose Batch child ends FAILED after retries is reported, and its asset's index is left unrebuilt.
 """
 
 from __future__ import annotations
@@ -37,12 +38,23 @@ def plan(dataset: str | None = None, year: int | None = None) -> list[tuple[str,
     return [(name, unit) for name in names for unit in _list_units(MODULES[name], year)]
 
 
+def manifest_item(name: str, unit: dict) -> dict:
+    """One worker-readable manifest line ``{dataset, unit, asset, year}``. ``asset``/``year`` are
+    recorded so the driver can rebuild indexes after a run without the workers' return values."""
+    return {"dataset": name, "unit": unit, "asset": MODULES[name].ASSET, "year": unit.get("year")}
+
+
 def manifest_items(dataset: str | None = None, year: int | None = None) -> list[dict]:
-    """The plan as worker-readable manifest lines: ``{dataset, unit, asset, year}``. ``asset``/``year``
-    are recorded so the driver can rebuild indexes after a Batch/docker run without the workers'
-    return values."""
-    return [{"dataset": name, "unit": unit, "asset": MODULES[name].ASSET, "year": unit.get("year")}
-            for name, unit in plan(dataset, year)]
+    """The plan as worker-readable manifest lines."""
+    return [manifest_item(name, unit) for name, unit in plan(dataset, year)]
+
+
+def stage(item: dict | None = None) -> None:
+    """Stage one unit (always overwriting; the driver decides skip-if-exists). As the
+    ``bii-stage-worker`` container entrypoint, reads its unit from the manifest (``BII_MANIFEST`` +
+    array index) when called with no argument. Producing nothing (an ocean tile) is not a failure."""
+    item = item or orchestration.manifest_line()
+    MODULES[item["dataset"]].stage_unit(item["unit"])
 
 
 def _pending(items: list[dict]) -> list[dict]:
@@ -61,7 +73,7 @@ def _manifest_uri() -> str:
 
 
 # --------------------------------------------------------------------------------------
-# Executors — write the manifest, run it, map failed lines back to units
+# Executor — run the units, map failed lines back to units
 # --------------------------------------------------------------------------------------
 def _failures(items: list[dict], failed: list[dict]) -> list[dict]:
     """Map ``orchestration`` ``{"index", "error"}`` failures to per-unit run-report records (also
@@ -70,22 +82,12 @@ def _failures(items: list[dict], failed: list[dict]) -> list[dict]:
              "asset": it["asset"], "year": it["year"], "error": f["error"]} for f in failed]
 
 
-def run_docker(items: list[dict], store: str | None = None) -> list[dict]:
-    """Stage ``items`` in one ``docker run`` per unit (local mirror of the Batch array); return the
-    failed units."""
-    muri = orchestration.write_manifest(items, _manifest_uri())
-    failed = orchestration.run_docker(items, ["bii-stage-worker"], manifest_uri=muri,
-                                      manifest_env="BII_STAGE_MANIFEST", store=store,
-                                      label=lambda it: f"{it['dataset']} {it['unit']['id']}")
-    return _failures(items, failed)
-
-
-def run_batch(items: list[dict], *, client=None, wait_fn=None) -> list[dict]:
-    """Submit ``items`` as one Batch array job; return the units whose child ended FAILED."""
-    muri = orchestration.write_manifest(items, _manifest_uri())
-    failed = orchestration.run_batch(items, ["bii-stage-worker"], manifest_uri=muri,
-                                     manifest_env="BII_STAGE_MANIFEST", job_name="bii-stage",
-                                     client=client, wait_fn=wait_fn)
+def _run(items: list[dict], executor: str, *, store=None, client=None, wait_fn=None) -> list[dict]:
+    """Stage ``items`` via the chosen executor (one container per unit); return the failed units."""
+    failed = orchestration.run_manifest(
+        items, ["bii-stage-worker"], executor=executor, manifest_uri=_manifest_uri(),
+        job_name="bii-stage", store=store, client=client, wait_fn=wait_fn,
+        label=lambda it: f"{it['dataset']} {it['unit']['id']}")
     return _failures(items, failed)
 
 
@@ -103,25 +105,22 @@ def _consolidate(assets) -> list[str]:
 # --------------------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------------------
-def run(dataset: str | None = None, year: int | None = None, *, executor: str = "docker",
-        overwrite: bool = False, client=None, wait_fn=None) -> dict:
+def run(dataset: str | None = None, year: int | None = None, *, items: list[dict] | None = None,
+        executor: str = "docker", overwrite: bool = False, store: str | None = None,
+        client=None, wait_fn=None) -> dict:
     """Stage the planned units (skipping those whose ``dst`` exists unless ``overwrite``) via the
     chosen executor (``docker`` locally / ``batch`` on AWS), then rebuild the footprint index of
     every fully-staged asset. The run continues past a failed unit; failures are reported and their
-    asset's index is left unrebuilt."""
-    items = manifest_items(dataset, year)
+    asset's index is left unrebuilt. ``items`` overrides the plan (e.g. an AOI subset); ``store`` is
+    the local stand-in store for the docker executor."""
+    items = manifest_items(dataset, year) if items is None else items
     pending = items if overwrite else _pending(items)
     print_summary(items, pending)
     if not pending:
         return {"planned": len(items), "pending": 0, "executor": executor, "failed": [],
                 "incomplete_indexes": [], "indexes": []}
 
-    if executor == "docker":
-        failed = run_docker(pending)
-    elif executor == "batch":
-        failed = run_batch(pending, client=client, wait_fn=wait_fn)
-    else:
-        raise SystemExit(f"unknown executor {executor!r} (docker | batch)")
+    failed = _run(pending, executor, store=store, client=client, wait_fn=wait_fn)
 
     # Rebuild set = the plan (every staged dataset but landcover, which builds its index in place),
     # minus assets with a failed unit: a missing COG would silently under-cover the orchestrator's

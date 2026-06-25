@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bii import orchestration, stage, stage_worker, tile_index
+from bii import orchestration, stage, tile_index
 
 
 class _StubModule:
@@ -71,23 +71,17 @@ def test_manifest_items_records_asset_for_consolidation(stub):
     assert all(it["asset"] == "fake" and it["year"] is None for it in items)
 
 
-def test_worker_dispatches_to_module_by_manifest_line(stub, local_roots):
-    uri = orchestration.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
-    result = stage_worker.worker(uri, 1)  # line 1 -> second unit
-    assert result["dst"] == "s3://b/fake/u2.tif" and result["staged"] and stub.staged == ["u2"]
+def test_stage_dispatches_to_module_by_manifest_line(stub):
+    stage.stage(stage.manifest_items("fake")[1])  # second unit
+    assert stub.staged == ["u2"]
 
 
-def test_worker_main_reads_env(stub, local_roots, monkeypatch):
+def test_stage_reads_the_indexed_unit_from_env(stub, local_roots, monkeypatch):
     uri = orchestration.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
-    monkeypatch.setenv("BII_STAGE_MANIFEST", uri)
+    monkeypatch.setenv("BII_MANIFEST", uri)
     monkeypatch.setenv("AWS_BATCH_JOB_ARRAY_INDEX", "0")
-    assert stage_worker.worker_main()["dst"] == "s3://b/fake/u1.tif"
-
-
-def test_worker_main_requires_manifest(monkeypatch):
-    monkeypatch.delenv("BII_STAGE_MANIFEST", raising=False)
-    with pytest.raises(SystemExit):
-        stage_worker.worker_main()
+    stage.stage()  # no arg -> reads line 0 from the manifest
+    assert stub.staged == ["u1"]
 
 
 # --------------------------------------------------------------------------------------

@@ -34,8 +34,8 @@ dev = [
 
 # Container worker entrypoints (the docker/Batch commands). The orchestrator CLIs live in scripts/.
 [project.scripts]
-bii-stage-worker = "bii.stage_worker:worker_cli"
-bii-process = "bii.process:cli"
+bii-stage-worker = "bii.stage:stage"
+bii-process = "bii.process:process"
 
 [build-system]
 requires = ["hatchling"]

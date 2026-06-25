@@ -102,7 +102,7 @@ def read_text(uri: str) -> str:
 
 
 def list_uris(prefix_uri: str) -> list[str]:
-    """List object URIs under a prefix (recursive for s3; one level for a local directory)."""
+    """List object URIs under a prefix, recursively (s3 or a local directory)."""
     if is_s3(prefix_uri):
         bucket, prefix = _split_s3(prefix_uri)
         client = _client()
@@ -119,5 +119,5 @@ def list_uris(prefix_uri: str) -> list[str]:
             token = resp["NextContinuationToken"]
         return out
     if os.path.isdir(prefix_uri):
-        return [os.path.join(prefix_uri, f) for f in os.listdir(prefix_uri)]
+        return [os.path.join(root, f) for root, _, files in os.walk(prefix_uri) for f in files]
     return []

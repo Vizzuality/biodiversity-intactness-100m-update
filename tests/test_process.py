@@ -1,22 +1,27 @@
-"""Unit tests for the per-chunk worker entrypoint — no network.
+"""Unit tests for processing — the per-chunk worker and the run driver — no network, no AWS.
 
-``compute_all`` (the only part that reads remote sources) is stubbed with synthetic layers; the
-real ``cog_worker.Worker``, COG write, idempotency, and manifest loading are exercised end to end
-against a local output root.
+``compute_all`` (the only part that reads remote sources) is stubbed with synthetic layers; the real
+``cog_worker.Worker``, COG write, and output layout are exercised against a local output root. The
+driver's Batch client is a fake recording ``submit_job`` (and reporting FAILED children); ``docker
+run`` is a fake recording argv.
 """
 
-import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import rasterio as rio
-from cog_worker import Worker
+from cog_worker import Manager, Worker
 from rio_cogeo.cogeo import cog_validate
 
-from bii import config, process
+from bii import config, orchestration, process, tile_index
 
 # A tiny EPSG:4326 chunk (coarse scale, no buffer) so synthetic layers are 10x10.
 _CHUNK = {"proj": "EPSG:4326", "scale": 0.1, "buffer": 0, "proj_bounds": (-86.0, 9.0, -85.0, 10.0)}
+
+# A small land region (Costa Rica-ish) and a coarse scale so a Manager yields a handful of chunks.
+_BOUNDS = (-86.0, 9.0, -84.0, 11.0)
+_SCALE = 0.5
 
 
 @pytest.fixture
@@ -33,6 +38,16 @@ def one_year(monkeypatch):
     monkeypatch.setattr(config, "END_YEAR", 2020)
 
 
+@pytest.fixture
+def batch_env(monkeypatch):
+    monkeypatch.setenv("BII_BATCH_QUEUE", "q")
+    monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
+
+
+def _manager():
+    return Manager(bounds=_BOUNDS, scale=_SCALE, proj="EPSG:4326", buffer=0)
+
+
 def _stub_compute_all(worker):
     shape = (1, worker.height, worker.width)
     return {
@@ -41,6 +56,43 @@ def _stub_compute_all(worker):
     }
 
 
+def _write_outputs(chunks, run_id):
+    """Materialize every expected output COG for ``chunks`` (stands in for a completed run)."""
+    for chunk in chunks:
+        worker = Worker(**chunk)
+        arr = np.ma.MaskedArray(
+            np.ones((1, worker.height, worker.width), np.float32),
+            mask=np.zeros((1, worker.height, worker.width), bool),
+        )
+        for layer in process.output_layers():
+            process.persist_cog(worker, arr, process.output_uri(run_id, layer, worker))
+
+
+class _FakeBatch:
+    """Records submit_job kwargs; fails the given array-child indices on the first job only."""
+
+    def __init__(self, fail_first=()):
+        self.submissions = []
+        self.fail_first = list(fail_first)
+
+    def submit_job(self, **kwargs):
+        self.submissions.append(kwargs)
+        return {"jobId": f"job-{len(self.submissions)}"}
+
+    def list_jobs(self, **kwargs):  # array children that ended FAILED (round 0 only)
+        idxs = self.fail_first if len(self.submissions) == 1 else []
+        return {"jobSummaryList": [
+            {"arrayProperties": {"index": i}, "status": "FAILED", "container": {"exitCode": 1}}
+            for i in idxs]}
+
+
+def _env(submission):
+    return {e["name"]: e["value"] for e in submission["containerOverrides"]["environment"]}
+
+
+# --------------------------------------------------------------------------------------
+# Worker — output layout, persist, compute
+# --------------------------------------------------------------------------------------
 def test_output_layers_are_metric_year_keys():
     layers = process.output_layers()
     assert len(layers) == len(process.BII_METRICS) * len(config.years())
@@ -55,44 +107,139 @@ def test_output_uri_is_deterministic_and_north_west_named(local_out):
     assert process.output_uri("v1", "bii_2020", worker) == uri  # stable across calls
 
 
-def test_persist_cog_writes_valid_cog_and_skips(local_out):
+def test_persist_cog_writes_valid_cog_and_overwrites(local_out):
     worker = Worker(**_CHUNK)
     arr = np.ma.MaskedArray(np.ones((1, 10, 10), np.float32), mask=np.zeros((1, 10, 10), bool))
     uri = process.output_uri("v1", "bii_2020", worker)
 
-    assert process.persist_cog(worker, arr, uri) is True
+    process.persist_cog(worker, arr, uri)
     valid, errors, _ = cog_validate(uri)
     assert valid, errors
     with rio.open(uri) as src:
         assert src.dtypes[0] == "float32"
         assert src.crs.to_epsg() == 4326
 
-    # Idempotent: a second write to an existing key is skipped.
-    assert process.persist_cog(worker, arr, uri) is False
+    process.persist_cog(worker, arr, uri)  # always overwrites (no skip) -> still a valid COG
+    assert cog_validate(uri)[0]
 
 
-def test_process_writes_all_layers_then_skips_on_rerun(local_out, one_year, monkeypatch):
+def test_process_writes_all_layers_unconditionally(local_out, one_year, monkeypatch):
     monkeypatch.setattr(process.model, "compute_all", _stub_compute_all)
-
-    result = process.process(_CHUNK, run_id="v1")
-    assert result["complete"] and result["skipped"] == []
-    assert len(result["written"]) == len(process.output_layers()) == 3
-    for uri in result["written"]:
+    process.process(_CHUNK, run_id="v1")
+    worker = Worker(**_CHUNK)
+    uris = [process.output_uri("v1", layer, worker) for layer in process.output_layers()]
+    assert len(uris) == 3
+    for uri in uris:
         valid, errors, _ = cog_validate(uri)
         assert valid, errors
 
-    # Re-run: every output exists, so the precheck short-circuits before compute (which would
-    # raise if called — guard that the reads truly don't happen).
-    monkeypatch.setattr(process.model, "compute_all",
-                        lambda w: (_ for _ in ()).throw(AssertionError("recomputed")))
-    rerun = process.process(_CHUNK, run_id="v1")
-    assert rerun["written"] == [] and len(rerun["skipped"]) == 3
+    # The skip lives in run(), not the worker: a rerun recomputes rather than short-circuiting.
+    calls = []
+    monkeypatch.setattr(process.model, "compute_all", lambda w: calls.append(1) or _stub_compute_all(w))
+    process.process(_CHUNK, run_id="v1")
+    assert calls == [1]
 
 
-def test_load_chunk_reads_nth_line(tmp_path):
-    manifest = tmp_path / "chunks.jsonl"
-    chunks = [dict(_CHUNK, proj_bounds=[w, 9.0, w + 1, 10.0]) for w in (-86.0, -85.0, -84.0)]
-    manifest.write_text("\n".join(json.dumps(c) for c in chunks) + "\n")
+# --------------------------------------------------------------------------------------
+# Driver — manifest build (ocean drop), skip-done, run/retry loop
+# --------------------------------------------------------------------------------------
+def test_manifest_uri_names_retry_rounds(local_out):
+    assert process.manifest_uri("v1", 0).endswith("/v1/chunks.jsonl")
+    assert process.manifest_uri("v1", 2).endswith("/v1/chunks_retry2.jsonl")
 
-    assert process.load_chunk(str(manifest), 0)["proj_bounds"][0] == -86.0
-    assert process.load_chunk(str(manifest), 2)["proj_bounds"][0] == -84.0
+
+def test_chunk_manifest_keeps_all_chunks_without_coverage_index(local_roots):
+    chunks = process.chunk_manifest(_manager(), chunksize=2)
+    full = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
+    assert chunks == full and len(chunks) > 1
+    assert all(isinstance(c["proj_bounds"], list) for c in chunks)  # round-trips as a JSON list
+
+
+def test_chunk_manifest_drops_ocean_chunks_via_coverage(local_roots, one_year):
+    mgr = _manager()
+    all_chunks = process.chunk_manifest(mgr, chunksize=2, coverage_assets=())
+    assert len(all_chunks) >= 2
+
+    # Coverage footprint strictly *interior* to the first chunk, so it doesn't touch the edges
+    # adjacent chunks share (an edge-touching footprint would intersect every neighbor too).
+    covered = all_chunks[0]
+    w, s, e, n = mgr.proj.transform_bounds(*covered["proj_bounds"], direction="inverse")
+    inset = (e - w) * 0.2
+    footprint = (w + inset, s + inset, e - inset, n - inset)
+    tile_index.build_index("landcover", [("s3://x/lc.tif", footprint)], year=2020)
+
+    kept = process.chunk_manifest(mgr, chunksize=2, coverage_assets=("landcover",), coverage_year=2020)
+    kept_bounds = {tuple(c["proj_bounds"]) for c in kept}
+    assert kept_bounds == {tuple(covered["proj_bounds"])}  # only the covered chunk survives
+    assert len(kept) < len(all_chunks)
+
+
+def test_run_converges_when_no_failures(local_roots, one_year, batch_env):
+    fake = _FakeBatch()
+    result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(),
+                         client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
+    assert result["complete"] and result["failed"] == 0
+    assert len(result["rounds"]) == 1 and len(fake.submissions) == 1
+    env = _env(fake.submissions[0])
+    assert env["BII_RUN_ID"] == "v1" and "BII_MANIFEST" in env  # run id + manifest forwarded
+    assert fake.submissions[0]["containerOverrides"]["command"] == ["bii-process"]
+
+
+def test_run_retries_failed_chunk_then_converges(local_roots, one_year, batch_env):
+    fake = _FakeBatch(fail_first=[0])  # round 0: the first chunk's child ends FAILED
+
+    def wait_fn(job_id, *, client=None):
+        return "FAILED" if len(fake.submissions) == 1 else "SUCCEEDED"
+
+    chunks = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
+    result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(),
+                         client=fake, wait_fn=wait_fn, max_rounds=5)
+    assert result["complete"] and result["failed"] == 0
+    assert len(result["rounds"]) == 2 and result["rounds"][0]["failed"] == 1
+    # the retry round resubmitted only the single failed chunk (size 1 -> non-array job).
+    assert "arrayProperties" not in fake.submissions[1]
+    assert orchestration.read_manifest(_env(fake.submissions[1])["BII_MANIFEST"]) == chunks[:1]
+
+
+def test_run_skips_chunks_already_written_unless_overwrite(local_roots, one_year, batch_env):
+    chunks = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
+    _write_outputs(chunks[:1], "v1")  # the first chunk is already fully written
+
+    fake = _FakeBatch()
+    process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(),
+                client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
+    submitted = orchestration.read_manifest(_env(fake.submissions[0])["BII_MANIFEST"])
+    assert chunks[0] not in submitted and len(submitted) == len(chunks) - 1
+
+    fake2 = _FakeBatch()
+    process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(), overwrite=True,
+                client=fake2, wait_fn=lambda *a, **k: "SUCCEEDED")
+    assert len(orchestration.read_manifest(_env(fake2.submissions[0])["BII_MANIFEST"])) == len(chunks)
+
+
+def test_run_docker_executor_runs_one_container_per_chunk(local_roots, one_year, monkeypatch):
+    calls = []
+    monkeypatch.setattr(orchestration.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
+    chunks = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
+    result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(), executor="docker")
+    assert result["complete"] and len(calls) == len(chunks)
+    assert calls[0][-1] == "bii-process" and "BII_RUN_ID=v1" in calls[0]
+
+
+def test_run_no_submit_writes_manifest_only(local_roots, one_year):
+    fake = _FakeBatch()
+    result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(),
+                         submit=False, client=fake)
+    assert not result["submitted"] and fake.submissions == []
+    assert orchestration.read_manifest(process.manifest_uri("v1")) == \
+        process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
+
+
+def test_run_empty_manifest_short_circuits(local_roots, one_year):
+    # Coverage index that overlaps nothing -> empty manifest -> no submission.
+    tile_index.build_index("landcover", [("s3://x/lc.tif", (100.0, 80.0, 101.0, 81.0))], year=2020)
+    fake = _FakeBatch()
+    result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=("landcover",),
+                         coverage_year=2020, client=fake, wait_fn=lambda *a, **k: None)
+    assert result["n_chunks"] == 0 and result["complete"] and fake.submissions == []

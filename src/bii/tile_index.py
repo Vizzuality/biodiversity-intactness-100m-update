@@ -17,8 +17,6 @@ so landcover joins the staged backend instead of a live per-chunk search.
 
 from __future__ import annotations
 
-import os
-
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import box, shape
@@ -90,12 +88,7 @@ def cog_footprint(uri: str) -> tuple[float, float, float, float]:
 def _asset_cogs(asset: str, year: int | None) -> list[str]:
     """Staged COG URIs for ``asset``: every ``.tif`` under its prefix (recursive), filtered to the
     year — annual assets embed the year in the COG path, single-epoch assets take all."""
-    prefix = config.staged_uri(asset)
-    if s3io.is_s3(prefix):
-        uris = s3io.list_uris(prefix + "/")  # list_objects_v2 is recursive
-    else:
-        uris = [os.path.join(r, f) for r, _, fs in os.walk(prefix) for f in fs] \
-            if os.path.isdir(prefix) else []
+    uris = s3io.list_uris(config.staged_uri(asset) + "/")
     return [u for u in uris if u.endswith(".tif") and (year is None or str(year) in u)]
 
 

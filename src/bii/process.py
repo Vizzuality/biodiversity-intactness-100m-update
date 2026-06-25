@@ -1,37 +1,46 @@
-"""Worker entrypoint — compute BII for one chunk and persist the output COGs.
+"""Processing: compute BII per chunk (the worker) and drive a whole run (the fan-out).
 
-The per-chunk unit of the processing fan-out. :func:`process` runs three ways with one code path:
-locally from a chunk dict (``scripts/test_chunk.py``), as one index of a Batch array job
-(:func:`main`, dispatched by ``AWS_BATCH_JOB_ARRAY_INDEX`` against an S3 ``chunks.jsonl`` manifest),
-and from the orchestrator's retry loop.
+The per-chunk worker and the run driver live together because they share the output layout:
+:func:`process` computes one chunk and writes its layer COGs; :func:`run` builds the chunk manifest,
+fans it out via the shared docker/Batch executors in :mod:`bii.orchestration`, and resubmits the
+chunks that failed. Mirrors :mod:`bii.stage` (driver + worker in one module):
 
-A chunk is a ``cog_worker`` ``chunk_params()`` dict — JSON-serializable, so the manifest is plain
-JSONL. :func:`process` rebuilds a :class:`cog_worker.Worker`, runs :func:`bii.model.compute_all`,
-and writes each layer to ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` (ports the notebook's
-``persist_cog`` to S3/boto3). It is idempotent: an existing layer is skipped, and a chunk whose every
-layer exists short-circuits before any reads, so the resubmit-missing loop never recomputes work.
+* **worker** — :func:`process` rebuilds a :class:`cog_worker.Worker` from a ``chunk_params`` dict,
+  runs :func:`bii.model.compute_all`, and writes each ``<metric>_<year>`` layer to the deterministic
+  key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` (ports the notebook's ``persist_cog`` to
+  S3/boto3). It always overwrites — the skip-if-exists decision lives in :func:`run`.
+* **driver** — :func:`run` drops non-finite and ocean chunks, skips chunks already fully written
+  (unless ``overwrite``, mirroring ``stage._pending``), fans the rest out, and retries the failed
+  lines until none remain.
+
+A chunk is JSON-serializable, so the manifest is plain JSONL and array index N maps to line N — the
+same contract :func:`process` (the ``bii-process`` container command) consumes.
 """
 
 from __future__ import annotations
 
-import json
-import os
-
+import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio as rio
-from cog_worker import Worker
+from cog_worker import Manager, Worker
+from shapely.geometry import box
 
-from . import config, model, s3io
+from . import config, model, orchestration, s3io, tile_index
 from .staging import cog
 
 # The metrics :func:`bii.model.calc_bii` returns per year; ``compute_all`` emits one COG per
-# ``<metric>_<year>``. Kept here (not imported from model) only as the precheck key source —
+# ``<metric>_<year>``. Kept here (not imported from model) only as the layer-key source —
 # it must stay in sync with calc_bii's result keys.
 BII_METRICS = ("abundance", "community_similarity", "bii")
 
 # GDAL read tuning for the remote source reads inside compute_all: caches off so a Batch
 # worker's memory stays bounded, retries on transient HTTP failures. Shared with staging.
 READ_ENV = cog.GDAL_READ_ENV
+
+# Any chunk overlapping a staged landcover or roads footprint is land we must process; one
+# overlapping neither is open water and is dropped.
+COVERAGE_ASSETS = ("landcover", "roads")
 
 
 # --------------------------------------------------------------------------------------
@@ -43,7 +52,7 @@ def output_layers() -> list[str]:
 
 
 def _coord(v: float) -> str:
-    # Fixed precision so the same chunk always maps to the same key (idempotent skip relies on it).
+    # Fixed precision so the same chunk always maps to the same key (the skip-if-exists check relies on it).
     return f"{v:.6f}"
 
 
@@ -59,78 +68,135 @@ def output_uri(run_id: str, layer: str, worker: Worker) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# COG persistence (ports notebook 3's persist_cog; S3 or local)
+# Worker — compute one chunk, persist its layer COGs (ports notebook 3's persist_cog)
 # --------------------------------------------------------------------------------------
-def persist_cog(worker: Worker, arr: np.ndarray, uri: str, *, skip_existing: bool = True) -> bool:
+def persist_cog(worker: Worker, arr: np.ndarray, uri: str) -> None:
     """Write ``arr`` (cast to float32) as a COG to ``uri`` (S3 or local) via an in-memory rasterio
     ``MemoryFile`` — no temp file. ``worker.write`` clips the buffer and carries the nodata mask.
-    Returns ``False`` if skipped (already there)."""
-    if skip_existing and s3io.exists(uri):
-        return False
+    Always overwrites; the skip-if-exists decision lives in :func:`run`."""
     arr = arr.astype(np.float32)
     with rio.MemoryFile() as memfile:
         worker.write(arr, memfile, driver="COG", overview_resampling="average")
         data = memfile.read()
     s3io.put_bytes(data, uri)
-    return True
 
 
-# --------------------------------------------------------------------------------------
-# Process one chunk
-# --------------------------------------------------------------------------------------
-def process(chunk: dict, run_id: str | None = None, *, skip_existing: bool = True) -> dict:
-    """Compute BII for one chunk and persist every output layer; return a result summary.
-
-    ``chunk`` is a ``cog_worker`` ``chunk_params()`` dict. Idempotent: if every output already
-    exists the reads + compute are skipped entirely; otherwise only missing layers are written.
-    """
+def process(chunk: dict | None = None, run_id: str | None = None) -> None:
+    """Compute BII for one chunk and persist every output layer (always overwriting; :func:`run` is
+    what skips chunks already written). As the ``bii-process`` container entrypoint, reads its chunk
+    from the manifest (``BII_MANIFEST`` + array index) when called with no argument."""
+    chunk = chunk or orchestration.manifest_line()
     run_id = run_id or config.RUN_ID
     worker = Worker(**chunk)
-    result = {"run_id": run_id, "bounds": list(worker.bounds), "complete": True}
-
-    targets = {layer: output_uri(run_id, layer, worker) for layer in output_layers()}
-    if skip_existing and all(s3io.exists(uri) for uri in targets.values()):
-        return result | {"written": [], "skipped": list(targets.values())}
-
     with rio.Env(**READ_ENV):
         layers = model.compute_all(worker)
-
-    written, skipped = [], []
     for key, arr in layers.items():
-        uri = targets[key]
-        (written if persist_cog(worker, arr, uri, skip_existing=skip_existing) else skipped).append(uri)
-
-    return result | {"written": written, "skipped": skipped}
+        persist_cog(worker, arr, output_uri(run_id, key, worker))
 
 
 # --------------------------------------------------------------------------------------
-# Batch entrypoint — AWS_BATCH_JOB_ARRAY_INDEX -> line N of the S3 chunks.jsonl manifest
+# Driver — manifest build (drop non-finite + ocean), skip-done, fan out, retry failed
 # --------------------------------------------------------------------------------------
-def load_chunk(manifest_uri: str, index: int) -> dict:
-    """Return chunk ``index`` (0-based line) of a JSONL manifest at ``manifest_uri`` (S3 or local)."""
-    lines = [ln for ln in s3io.read_text(manifest_uri).splitlines() if ln.strip()]
-    return json.loads(lines[index])
+def manifest_uri(run_id: str, round_: int = 0) -> str:
+    """``chunks.jsonl`` for the initial run, ``chunks_retry<n>.jsonl`` for each retry round."""
+    name = "chunks.jsonl" if round_ == 0 else f"chunks_retry{round_}.jsonl"
+    return config.out_uri(run_id, name)
 
 
-def main(argv=None) -> dict:
-    """Batch array entrypoint: resolve this index's chunk from the manifest and process it.
-
-    Reads ``BII_CHUNKS_URI`` (the manifest), ``AWS_BATCH_JOB_ARRAY_INDEX`` (defaults to 0 for a
-    one-off local run), and ``BII_RUN_ID`` (output prefix) from the environment — see ``.env``.
-    """
-    manifest = os.environ.get("BII_CHUNKS_URI")
-    if not manifest:
-        raise SystemExit("BII_CHUNKS_URI must point at the chunks.jsonl manifest")
-    index = int(os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX", "0"))
-    chunk = load_chunk(manifest, index)
-    result = process(chunk)
-    print(json.dumps(result))
-    return result
-
-
-def cli() -> None:  # console-script shim: discard the dict so ``sys.exit(cli())`` exits 0
-    main()
+def _coverage(assets: tuple[str, ...], year: int) -> gpd.GeoDataFrame | None:
+    """Union ``assets``' footprint indexes into one GeoDataFrame with a built ``.sindex``, or
+    ``None`` if none exist (so the caller keeps every chunk rather than dropping the whole globe).
+    Annual assets are read at ``year``; single-epoch assets at ``year=None``."""
+    frames = []
+    for asset in assets:
+        gdf = tile_index.read_index(asset, year if asset in model.ANNUAL_ASSETS else None)
+        if gdf is not None and len(gdf):
+            frames.append(gdf[["geometry"]])
+    if not frames:
+        return None
+    gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=tile_index.INDEX_CRS)
+    gdf.sindex  # build once; reused across every chunk query below
+    return gdf
 
 
-if __name__ == "__main__":
-    main()
+def chunk_manifest(
+    manager: Manager,
+    chunksize: int = 4096,
+    *,
+    coverage_assets: tuple[str, ...] = COVERAGE_ASSETS,
+    coverage_year: int | None = None,
+) -> list[dict]:
+    """Enumerate the processable chunks of ``manager`` as ``chunk_params`` dicts (non-finite and
+    ocean chunks dropped). ``coverage_year`` selects the annual coverage index (default: first year)."""
+    cov = _coverage(coverage_assets, coverage_year or config.START_YEAR) if coverage_assets else None
+    chunks: list[dict] = []
+    for params in manager.chunk_params(chunksize):
+        bounds = manager.proj.transform_bounds(*params["proj_bounds"], direction="inverse")
+        if not np.isfinite(bounds).all():
+            continue
+        if cov is not None and len(cov.sindex.query(box(*bounds), predicate="intersects")) == 0:
+            continue
+        # Plain list so the JSONL round-trips identically (chunk_params yields a BoundingBox).
+        chunks.append(dict(params, proj_bounds=list(params["proj_bounds"])))
+    return chunks
+
+
+def _pending(chunks: list[dict], run_id: str) -> list[dict]:
+    """Chunks missing at least one output layer (skip-if-exists; mirrors ``stage._pending``). Lists
+    the output prefix once, then checks membership in-memory."""
+    present = set(s3io.list_uris(config.out_uri(run_id)))
+    layers = output_layers()
+    pending = []
+    for c in chunks:
+        worker = Worker(**c)
+        if not all(output_uri(run_id, layer, worker) in present for layer in layers):
+            pending.append(c)
+    return pending
+
+
+def run(
+    manager: Manager,
+    *,
+    run_id: str | None = None,
+    chunksize: int = 4096,
+    coverage_assets: tuple[str, ...] = COVERAGE_ASSETS,
+    coverage_year: int | None = None,
+    executor: str = "batch",
+    overwrite: bool = False,
+    max_rounds: int = 5,
+    submit: bool = True,
+    store: str | None = None,
+    client=None,
+    wait_fn=None,
+) -> dict:
+    """Build the manifest and (when ``submit``) run it via ``executor`` (``docker`` locally / ``batch``
+    on AWS), retrying the chunks whose container/child failed until complete or ``max_rounds``.
+
+    Chunks already fully written are skipped unless ``overwrite``. ``submit=False`` writes only the
+    manifest — the size gate before any Batch spend. ``store`` is the local stand-in store for the
+    docker executor; ``wait_fn`` is injectable so the Batch loop can be driven synchronously in tests."""
+    run_id = run_id or config.RUN_ID
+    chunks = chunk_manifest(manager, chunksize, coverage_assets=coverage_assets, coverage_year=coverage_year)
+    pending = chunks if overwrite else _pending(chunks, run_id)
+
+    if not submit or not pending:
+        orchestration.write_manifest(pending, manifest_uri(run_id))
+        return {"run_id": run_id, "n_chunks": len(chunks), "pending": len(pending),
+                "manifest": manifest_uri(run_id), "submitted": bool(pending) and submit,
+                "complete": not pending}
+
+    remaining, rounds = pending, []
+    for r in range(max_rounds):
+        n = len(remaining)
+        failed = orchestration.run_manifest(
+            remaining, ["bii-process"], executor=executor, manifest_uri=manifest_uri(run_id, r),
+            job_name=f"bii-{run_id}", env={"BII_RUN_ID": run_id}, store=store,
+            label=lambda c: f"chunk {c['proj_bounds']}", client=client, wait_fn=wait_fn)
+        remaining = [remaining[f["index"]] for f in failed]
+        rounds.append({"round": r, "submitted": n, "failed": len(remaining)})
+        if not remaining:
+            break
+
+    return {"run_id": run_id, "n_chunks": len(chunks), "pending": len(pending),
+            "manifest": manifest_uri(run_id), "rounds": rounds, "failed": len(remaining),
+            "complete": not remaining, "submitted": True}
