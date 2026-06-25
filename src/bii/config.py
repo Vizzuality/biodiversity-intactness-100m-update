@@ -14,10 +14,11 @@ import os
 # --------------------------------------------------------------------------------------
 # S3 layout
 # --------------------------------------------------------------------------------------
-# Bucket holding staged inputs, manifests, and outputs.
+# Outputs + manifests (kept forever); regenerable staged inputs/index (auto-deleted) live separately.
 BUCKET = "vizz-bii"
+PROCESSING_BUCKET = "vizz-bii-processing"
 
-# Key prefixes within the bucket.
+# Key prefixes within the buckets.
 STAGED_PREFIX = "input_cogs"
 OUT_PREFIX = "out"
 
@@ -26,7 +27,7 @@ OUT_PREFIX = "out"
 # (or assign the attribute) to a local directory to run staging/processing on local disk — env so
 # a docker/Batch container picks up the same root the host built the manifest with (the index-part
 # paths are derived from ``STAGED_ROOT`` at runtime inside the container).
-STAGED_ROOT = os.environ.get("BII_STAGED_ROOT", f"s3://{BUCKET}/{STAGED_PREFIX}")
+STAGED_ROOT = os.environ.get("BII_STAGED_ROOT", f"s3://{PROCESSING_BUCKET}/{STAGED_PREFIX}")
 OUT_ROOT = os.environ.get("BII_OUT_ROOT", f"s3://{BUCKET}/{OUT_PREFIX}")
 
 # Run id: the sub-prefix under the output root segregating one processing run's COGs

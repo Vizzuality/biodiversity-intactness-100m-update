@@ -20,3 +20,9 @@ docs/
 
 # macos
 .DS_Store
+
+# OpenTofu / Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
