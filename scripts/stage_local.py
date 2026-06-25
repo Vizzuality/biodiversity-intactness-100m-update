@@ -128,7 +128,7 @@ def main(argv=None) -> dict:
         subprocess.run(["docker", "build", "-t", "bii", "-f", "Dockerfile", "."], check=True)
 
     stage.print_summary(items, pending)
-    failed = stage._run_docker(pending, store=staged) if pending else []
+    failed = stage.run_docker(pending, store=staged) if pending else []
     # Skip rebuilding any asset with a failed unit (incomplete footprint -> dropped land chunks).
     incomplete = {(f["asset"], f["year"]) for f in failed}
     assets = {(it["asset"], it["year"]) for it in pending if it["dataset"] not in stage.INDEX_IN_PLACE}

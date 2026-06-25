@@ -13,14 +13,14 @@ from __future__ import annotations
 import json
 import os
 
-from . import orchestrate
+from . import orchestration
 from .staging import MODULES
 
 
 def worker(manifest_uri: str, index: int) -> dict:
     """Stage line ``index`` of a staging manifest; return a completion record built from the
     manifest line plus whether the unit produced output (``staged``)."""
-    item = orchestrate.read_manifest(manifest_uri)[index]
+    item = orchestration.read_manifest(manifest_uri)[index]
     staged = MODULES[item["dataset"]].stage_unit(item["unit"])
     return {"dataset": item["dataset"], "id": item["unit"]["id"],
             "dst": item["unit"]["dst"], "staged": bool(staged)}

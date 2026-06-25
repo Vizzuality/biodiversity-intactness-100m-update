@@ -1,28 +1,22 @@
-"""Orchestrator: build a chunk manifest, submit it as an AWS Batch array job, verify the
-outputs, and resubmit the chunks still missing — looping until none remain.
+"""Processing-run driver: build a chunk manifest, submit it as a Batch array, verify the outputs,
+and resubmit the chunks still missing — looping until none remain.
 
-Ports notebook 3's ``_cog_worker_run`` track/retry loop off Dask onto Batch:
+Ports notebook 3's ``_cog_worker_run`` track/retry loop off Dask onto Batch, over the docker/Batch
+executors in :mod:`bii.orchestration`:
 
-1. **Manifest** (:func:`chunk_manifest`) — walk ``manager.chunk_params(chunksize)``, drop
-   non-finite (off-projection) chunks and ocean chunks (those overlapping no staged
-   ``landcover``/``roads`` footprint), and write the survivors as JSONL. A Batch array index N
-   maps to line N, which is exactly what :func:`bii.process.process` consumes.
-2. **Submit** (:func:`submit_array`) — one Batch array job over the manifest, with a Spot-friendly
-   ``retryStrategy`` and the ``BII_CHUNKS_URI``/``BII_RUN_ID`` env :func:`bii.process.main` reads.
+1. **Manifest** (:func:`chunk_manifest`) — walk ``manager.chunk_params(chunksize)``, drop non-finite
+   (off-projection) and ocean chunks (those overlapping no staged ``landcover``/``roads`` footprint),
+   and write the survivors as JSONL. A Batch array index N maps to line N, which is exactly what
+   :func:`bii.process.process` consumes.
+2. **Submit** (:func:`orchestration.submit_array`) — one Batch array job over the manifest, with the
+   ``BII_CHUNKS_URI``/``BII_RUN_ID`` env :func:`bii.process.main` reads.
 3. **Verify + retry** (:func:`run`) — list ``out/<run_id>/`` once, treat a chunk as done only when
    every output layer key is present, and resubmit just the missing chunks as a smaller array.
-
-Batch infra is deployment-specific, so the queue/definition come from ``BII_BATCH_QUEUE`` /
-``BII_BATCH_JOB_DEF`` (or explicit args). The boto3 Batch client and the wait step are injectable
-for testing.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
-import time
 
 import geopandas as gpd
 import numpy as np
@@ -30,31 +24,17 @@ import pandas as pd
 from cog_worker import Manager, Worker
 from shapely.geometry import box
 
-from . import config, model, process, s3io, tile_index
+from . import config, model, orchestration, process, s3io, tile_index
 
 # Any chunk overlapping a staged landcover or roads footprint is land we must process; one
 # overlapping neither is open water and is dropped.
 COVERAGE_ASSETS = ("landcover", "roads")
-_POLL_SECONDS = 30.0
 
 
-# --------------------------------------------------------------------------------------
-# Manifest locations + JSONL I/O (reuses process.py's S3/local byte helpers)
-# --------------------------------------------------------------------------------------
 def manifest_uri(run_id: str, round_: int = 0) -> str:
     """``chunks.jsonl`` for the initial run, ``chunks_retry<n>.jsonl`` for each retry round."""
     name = "chunks.jsonl" if round_ == 0 else f"chunks_retry{round_}.jsonl"
     return config.out_uri(run_id, name)
-
-
-def write_manifest(items: list[dict], uri: str) -> str:
-    """Write ``items`` as JSONL (one chunk dict per line) to ``uri`` (S3 or local)."""
-    s3io.put_bytes("".join(json.dumps(it) + "\n" for it in items).encode(), uri)
-    return uri
-
-
-def read_manifest(uri: str) -> list[dict]:
-    return [json.loads(ln) for ln in s3io.read_text(uri).splitlines() if ln.strip()]
 
 
 # --------------------------------------------------------------------------------------
@@ -125,63 +105,6 @@ def missing_chunks(chunks: list[dict], run_id: str) -> list[dict]:
 
 
 # --------------------------------------------------------------------------------------
-# Batch submit + wait
-# --------------------------------------------------------------------------------------
-def _batch_client(client=None):
-    if client is not None:
-        return client
-    import boto3  # lazy so unit tests don't need credentials (mirrors s3io._client)
-
-    return boto3.client("batch")
-
-
-def submit_array(
-    *,
-    manifest_uri: str,
-    size: int,
-    run_id: str,
-    job_name: str | None = None,
-    job_queue: str | None = None,
-    job_definition: str | None = None,
-    attempts: int = 3,
-    environment: dict | None = None,
-    client=None,
-) -> str:
-    """Submit the manifest as a Batch array job; return the Batch job id.
-
-    Index N processes line N (``size == 1`` submits a plain non-array job, since arrays need ≥ 2).
-    ``attempts`` drives the Spot-friendly ``retryStrategy``. The queue/definition fall back to
-    ``BII_BATCH_QUEUE`` / ``BII_BATCH_JOB_DEF``."""
-    job_queue = job_queue or os.environ.get("BII_BATCH_QUEUE")
-    job_definition = job_definition or os.environ.get("BII_BATCH_JOB_DEF")
-    if not job_queue or not job_definition:
-        raise SystemExit("set BII_BATCH_QUEUE and BII_BATCH_JOB_DEF (or pass job_queue/job_definition)")
-
-    env = {"BII_CHUNKS_URI": manifest_uri, "BII_RUN_ID": run_id, **(environment or {})}
-    kwargs = dict(
-        jobName=job_name or f"bii-{run_id}",
-        jobQueue=job_queue,
-        jobDefinition=job_definition,
-        containerOverrides={"environment": [{"name": k, "value": str(v)} for k, v in env.items()]},
-        retryStrategy={"attempts": attempts},
-    )
-    if size > 1:
-        kwargs["arrayProperties"] = {"size": size}
-    return _batch_client(client).submit_job(**kwargs)["jobId"]
-
-
-def wait_for_array(job_id: str, *, client=None) -> str:
-    """Poll Batch until ``job_id`` is SUCCEEDED or FAILED; return that state. A FAILED array is not
-    fatal here — the :func:`missing_chunks` diff resubmits whatever indices didn't write."""
-    client = _batch_client(client)
-    while True:
-        status = client.describe_jobs(jobs=[job_id])["jobs"][0].get("status", "")
-        if status in ("SUCCEEDED", "FAILED"):
-            return status
-        time.sleep(_POLL_SECONDS)
-
-
-# --------------------------------------------------------------------------------------
 # Driver — submit, wait, verify, retry-missing until empty
 # --------------------------------------------------------------------------------------
 def run(
@@ -199,21 +122,24 @@ def run(
     """Build the manifest and (when ``submit``) verify/retry-missing until complete or ``max_rounds``.
 
     ``submit=False`` writes only the manifest — the size gate before any Batch spend. ``wait_fn`` is
-    injectable so the loop can be driven synchronously in tests (defaults to :func:`wait_for_array`)."""
+    injectable so the loop can be driven synchronously in tests (defaults to
+    :func:`orchestration.wait_for_array`)."""
     run_id = run_id or config.RUN_ID
-    wait_fn = wait_fn or wait_for_array
+    wait_fn = wait_fn or orchestration.wait_for_array
     chunks = chunk_manifest(manager, chunksize, coverage_assets=coverage_assets, coverage_year=coverage_year)
 
     if not submit or not chunks:
-        write_manifest(chunks, manifest_uri(run_id))
+        orchestration.write_manifest(chunks, manifest_uri(run_id))
         return {"run_id": run_id, "n_chunks": len(chunks), "manifest": manifest_uri(run_id),
                 "submitted": bool(chunks) and submit, "complete": not chunks}
 
     remaining, rounds = chunks, []
     for r in range(max_rounds):
         n = len(remaining)
-        muri = write_manifest(remaining, manifest_uri(run_id, r))
-        job_id = submit_array(manifest_uri=muri, size=n, run_id=run_id, client=client)
+        muri = orchestration.write_manifest(remaining, manifest_uri(run_id, r))
+        job_id = orchestration.submit_array(
+            size=n, job_name=f"bii-{run_id}",
+            environment={"BII_CHUNKS_URI": muri, "BII_RUN_ID": run_id}, client=client)
         wait_fn(job_id, client=client)
         remaining = missing_chunks(remaining, run_id)
         rounds.append({"round": r, "job_id": job_id, "submitted": n, "missing": len(remaining)})
@@ -222,29 +148,3 @@ def run(
 
     return {"run_id": run_id, "n_chunks": len(chunks), "manifest": manifest_uri(run_id),
             "rounds": rounds, "missing": len(remaining), "complete": not remaining, "submitted": True}
-
-
-# --------------------------------------------------------------------------------------
-# CLI
-# --------------------------------------------------------------------------------------
-def main(argv=None) -> dict:
-    """``scripts/run.py`` entrypoint: build + submit a processing run, then verify/retry."""
-    parser = argparse.ArgumentParser(description="Build, submit, and verify a BII processing run.")
-    parser.add_argument("--run-id", default=None, help="output prefix (default: BII_RUN_ID / config.RUN_ID)")
-    parser.add_argument("--bounds", type=float, nargs=4, metavar=("W", "S", "E", "N"),
-                        default=[-180.0, -85.0, 180.0, 85.0], help="analysis extent in EPSG:4326")
-    parser.add_argument("--no-submit", action="store_true", help="write the manifest only; don't submit to Batch")
-    args = parser.parse_args(argv)
-
-    manager = Manager(bounds=tuple(args.bounds), scale=config.SCALE_DEG, proj=config.PROJ, buffer=config.BUFFER)
-    result = run(manager, run_id=args.run_id, submit=not args.no_submit)
-    print(json.dumps(result))
-    return result
-
-
-def cli() -> None:  # console-script shim: discard the dict so ``sys.exit(cli())`` exits 0
-    main()
-
-
-if __name__ == "__main__":
-    main()

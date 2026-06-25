@@ -1,4 +1,4 @@
-"""Unit tests for the orchestrator — no network, no AWS.
+"""Unit tests for the processing-run driver — no network, no AWS.
 
 The Batch boto3 client is replaced with a fake that records ``submit_job`` calls, and the
 verify/retry loop is driven with a synchronous ``wait_fn`` that materializes outputs on disk.
@@ -6,18 +6,26 @@ Manifest build (ocean drop), the output diff, and the retry-until-empty loop are
 to end against a local staged + output root.
 """
 
+import importlib.util
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 from cog_worker import Manager, Worker
 from shapely.geometry import box
 
-from bii import config, orchestrate, process, tile_index
+from bii import config, orchestrate, orchestration, process, tile_index
 
 # A small land region (Costa Rica-ish) and a coarse scale so a Manager yields a handful of chunks.
 _BOUNDS = (-86.0, 9.0, -84.0, 11.0)
 _SCALE = 0.5  # ~0.5 deg pixels -> few-pixel chunks at chunksize below
+
+# scripts/ is not a package — load the run CLI by path.
+_RUN_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "run.py"
+_spec = importlib.util.spec_from_file_location("run_script", _RUN_SCRIPT)
+run_script = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(run_script)
 
 
 @pytest.fixture
@@ -70,17 +78,8 @@ def _write_outputs(chunks, run_id):
 
 
 # --------------------------------------------------------------------------------------
-# Manifest I/O
+# Manifest naming
 # --------------------------------------------------------------------------------------
-def test_write_read_manifest_round_trips(local_roots):
-    chunks = [
-        {"proj": "EPSG:4326", "scale": _SCALE, "buffer": 0, "proj_bounds": [w, 9.0, w + 1, 10.0]}
-        for w in (-86.0, -85.0)
-    ]
-    uri = orchestrate.write_manifest(chunks, orchestrate.manifest_uri("v1"))
-    assert orchestrate.read_manifest(uri) == chunks
-
-
 def test_manifest_uri_names_retry_rounds(local_roots):
     assert orchestrate.manifest_uri("v1", 0).endswith("/v1/chunks.jsonl")
     assert orchestrate.manifest_uri("v1", 2).endswith("/v1/chunks_retry2.jsonl")
@@ -148,56 +147,18 @@ def test_missing_when_one_layer_absent(local_roots, one_year):
 
 
 # --------------------------------------------------------------------------------------
-# Batch submit
-# --------------------------------------------------------------------------------------
-def test_submit_array_builds_array_job_with_env_and_retry(local_roots, monkeypatch):
-    monkeypatch.setenv("BII_BATCH_QUEUE", "q")
-    monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
-    fake = _FakeBatch()
-    job_id = orchestrate.submit_array(
-        manifest_uri="s3://b/out/v1/chunks.jsonl", size=5, run_id="v1", client=fake
-    )
-    assert job_id == "job-1"
-    (kw,) = fake.submissions
-    assert kw["arrayProperties"] == {"size": 5}
-    assert kw["jobQueue"] == "q" and kw["jobDefinition"] == "jd"
-    assert kw["retryStrategy"]["attempts"] == 3
-    env = {e["name"]: e["value"] for e in kw["containerOverrides"]["environment"]}
-    assert env["BII_CHUNKS_URI"] == "s3://b/out/v1/chunks.jsonl"
-    assert env["BII_RUN_ID"] == "v1"
-
-
-def test_submit_array_single_index_is_not_an_array_job(monkeypatch):
-    fake = _FakeBatch()
-    orchestrate.submit_array(
-        manifest_uri="m", size=1, run_id="v1", client=fake, job_queue="q", job_definition="jd"
-    )
-    assert "arrayProperties" not in fake.submissions[0]
-
-
-def test_submit_array_requires_queue_and_definition(monkeypatch):
-    monkeypatch.delenv("BII_BATCH_QUEUE", raising=False)
-    monkeypatch.delenv("BII_BATCH_JOB_DEF", raising=False)
-    with pytest.raises(SystemExit):
-        orchestrate.submit_array(manifest_uri="m", size=2, run_id="v1", client=_FakeBatch())
-
-
-# --------------------------------------------------------------------------------------
 # Driver loop
 # --------------------------------------------------------------------------------------
 def test_run_converges_when_outputs_appear(local_roots, one_year, batch_env):
     fake = _FakeBatch()
-    chunks_holder = {}
 
-    def wait_fn(job_id, *, client=None, interval=0.0):
-        # Simulate the array job completing: write all outputs for the round's manifest.
-        manifest = read_for(fake)
-        _write_outputs(manifest, "v1")
+    def wait_fn(job_id, *, client=None):
+        _write_outputs(read_for(fake), "v1")
 
     def read_for(_fake):
         # The round's manifest is the most recent submission's BII_CHUNKS_URI.
         env = {e["name"]: e["value"] for e in _fake.submissions[-1]["containerOverrides"]["environment"]}
-        return orchestrate.read_manifest(env["BII_CHUNKS_URI"])
+        return orchestration.read_manifest(env["BII_CHUNKS_URI"])
 
     result = orchestrate.run(
         _manager(), run_id="v1", chunksize=2, coverage_assets=(), client=fake, wait_fn=wait_fn
@@ -211,9 +172,9 @@ def test_run_retries_then_converges(local_roots, one_year, batch_env):
     fake = _FakeBatch()
     state = {"round": 0}
 
-    def wait_fn(job_id, *, client=None, interval=0.0):
+    def wait_fn(job_id, *, client=None):
         env = {e["name"]: e["value"] for e in fake.submissions[-1]["containerOverrides"]["environment"]}
-        manifest = orchestrate.read_manifest(env["BII_CHUNKS_URI"])
+        manifest = orchestration.read_manifest(env["BII_CHUNKS_URI"])
         # Round 0: only finish all-but-one chunk, forcing exactly one retry round.
         finish = manifest if state["round"] else manifest[:-1]
         _write_outputs(finish, "v1")
@@ -229,8 +190,8 @@ def test_run_retries_then_converges(local_roots, one_year, batch_env):
     # The retry round resubmitted only the single missing chunk (size 1 -> non-array job).
     assert "arrayProperties" not in fake.submissions[1]
     retry_env = {e["name"]: e["value"] for e in fake.submissions[1]["containerOverrides"]["environment"]}
-    full_manifest = orchestrate.read_manifest(orchestrate.manifest_uri("v1", 0))
-    assert orchestrate.read_manifest(retry_env["BII_CHUNKS_URI"]) == full_manifest[-1:]
+    full_manifest = orchestration.read_manifest(orchestrate.manifest_uri("v1", 0))
+    assert orchestration.read_manifest(retry_env["BII_CHUNKS_URI"]) == full_manifest[-1:]
 
 
 def test_run_empty_manifest_short_circuits(local_roots, one_year):
@@ -245,15 +206,15 @@ def test_run_empty_manifest_short_circuits(local_roots, one_year):
 
 
 # --------------------------------------------------------------------------------------
-# CLI
+# CLI (scripts/run.py)
 # --------------------------------------------------------------------------------------
-def test_main_no_submit_writes_manifest_only(local_roots, capsys, monkeypatch):
+def test_run_script_no_submit_writes_manifest_only(local_roots, capsys, monkeypatch):
     # The CLI builds its Manager from the config grid; coarsen it so the manifest stays small.
     monkeypatch.setattr(config, "SCALE_DEG", _SCALE)
     monkeypatch.setattr(config, "BUFFER", 0)
-    result = orchestrate.main(["--run-id", "cli", "--bounds", "-86", "9", "-84", "11", "--no-submit"])
+    result = run_script.main(["--run-id", "cli", "--bounds", "-86", "9", "-84", "11", "--no-submit"])
     assert result["submitted"] is False and result["n_chunks"] > 0
     # No staged coverage index -> the ocean drop is a no-op, so this matches a no-coverage build.
-    assert orchestrate.read_manifest(result["manifest"]) == orchestrate.chunk_manifest(_manager())
+    assert orchestration.read_manifest(result["manifest"]) == orchestrate.chunk_manifest(_manager())
     printed = json.loads(capsys.readouterr().out.strip())
     assert printed["n_chunks"] == result["n_chunks"]

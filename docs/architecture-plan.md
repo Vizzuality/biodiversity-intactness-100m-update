@@ -46,7 +46,10 @@ src/bii/
   sources.py           # asset registry: per-asset read strategy + forestManagement provider switch (FML | SDPT)
   tile_index.py        # footprint-index build + query; unifies staged-GeoParquet AND live-STAC (LULC) lookup
   process.py           # process(chunk_dict) worker entrypoint -> write output COGs to S3
-  orchestrate.py       # manifest -> Batch array submit -> verify -> retry-missing (for processing AND staging)
+  stage_worker.py      # per-unit staging worker entrypoint (the docker/Batch container command)
+  orchestration.py     # shared executors: run a JSONL manifest via local docker OR Batch array
+  orchestrate.py       # processing-run driver: chunk manifest -> submit -> verify -> retry-missing
+  stage.py             # staging driver: enumerate units -> run -> rebuild footprint indexes
   staging/
     __init__.py
     cog.py             # shared stream-to-COG writer + footprint-index builder (rio-cogeo / rasterio COG driver)
@@ -59,9 +62,10 @@ src/bii/
     roads.py           # OSM: rasterize highways (osmctools) -> per-region 100m COG + index
 scripts/
   download.py          # existing — optional dev-only local fetch (de-emphasized)
-  stage.py             # thin CLI -> bii.staging (run locally or submit to Batch)
+  stage.py             # CLI -> bii.stage (run locally or submit to Batch)
+  stage_local.py       # CLI -> AOI-subset local docker staging
   test_chunk.py        # run ONE chunk end-to-end locally
-  run.py               # thin CLI -> bii.orchestrate (submit + verify global processing run)
+  run.py               # CLI -> bii.orchestrate (submit + verify global processing run)
 Dockerfile             # geo base (GDAL/rasterio) + osmctools + deps; staging, processing, local test
 ```
 

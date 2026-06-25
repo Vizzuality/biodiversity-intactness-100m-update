@@ -32,11 +32,10 @@ dev = [
     "rio-cogeo",  # cog_validate, used only by the test suite
 ]
 
+# Container worker entrypoints (the docker/Batch commands). The orchestrator CLIs live in scripts/.
 [project.scripts]
-bii-stage = "bii.stage:cli"
 bii-stage-worker = "bii.stage_worker:worker_cli"
 bii-process = "bii.process:cli"
-bii-run = "bii.orchestrate:cli"
 
 [build-system]
 requires = ["hatchling"]

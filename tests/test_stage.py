@@ -1,15 +1,14 @@
-"""Unit tests for the staging orchestrator — no network, no AWS, no docker.
+"""Unit tests for the staging driver — no network, no AWS, no docker.
 
 The Batch client is a fake recording ``submit_job``; ``docker run`` is a fake recording argv; the
 worker dispatch is exercised against a stub dataset module injected into ``MODULES``.
 """
 
-import json
 from types import SimpleNamespace
 
 import pytest
 
-from bii import config, stage, stage_worker, tile_index
+from bii import config, orchestration, stage, stage_worker, tile_index
 
 
 @pytest.fixture
@@ -79,13 +78,13 @@ def test_manifest_items_records_asset_for_consolidation(stub):
 
 
 def test_worker_dispatches_to_module_by_manifest_line(stub, local_roots):
-    uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
+    uri = orchestration.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
     result = stage_worker.worker(uri, 1)  # line 1 -> second unit
     assert result["dst"] == "s3://b/fake/u2.tif" and result["staged"] and stub.staged == ["u2"]
 
 
 def test_worker_main_reads_env(stub, local_roots, monkeypatch):
-    uri = stage.orchestrate.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
+    uri = orchestration.write_manifest(stage.manifest_items("fake"), stage._manifest_uri())
     monkeypatch.setenv("BII_STAGE_MANIFEST", uri)
     monkeypatch.setenv("AWS_BATCH_JOB_ARRAY_INDEX", "0")
     assert stage_worker.worker_main()["dst"] == "s3://b/fake/u1.tif"
@@ -103,7 +102,7 @@ def test_worker_main_requires_manifest(monkeypatch):
 def test_run_docker_one_container_per_unit(stub, local_roots, monkeypatch):
     monkeypatch.setenv("BII_STAGE_IMAGE", "img")
     calls = []
-    monkeypatch.setattr(stage.subprocess, "run",
+    monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
     items = _items(("fake", "u1", "s3://b/fake/u1.tif", "fake"),
                    ("roads", "r1", "s3://b/roads/r1.tif", "roads"))
@@ -119,7 +118,7 @@ def test_run_docker_one_container_per_unit(stub, local_roots, monkeypatch):
 
 
 def test_run_docker_continues_past_failure_and_reports_exception(stub, local_roots, monkeypatch):
-    monkeypatch.setattr(stage.subprocess, "run",
+    monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: SimpleNamespace(returncode=2, stdout=""))
     items = _items(("fake", "u1", "s3://b/fake/u1.tif", "fake"))
     monkeypatch.setattr(stage, "_pending", lambda its: items)
@@ -135,22 +134,6 @@ def test_run_docker_continues_past_failure_and_reports_exception(stub, local_roo
 # --------------------------------------------------------------------------------------
 # batch executor
 # --------------------------------------------------------------------------------------
-def test_submit_array_overrides_command_and_env(local_roots):
-    fake = _FakeBatch()
-    stage.submit_array("s3://b/stage/main.jsonl", 4, "q", "jd", "bii-stage-main", client=fake)
-    (kw,) = fake.submissions
-    assert kw["arrayProperties"] == {"size": 4} and kw["jobDefinition"] == "jd"
-    assert kw["containerOverrides"]["command"] == ["bii-stage-worker"]
-    env = {e["name"]: e["value"] for e in kw["containerOverrides"]["environment"]}
-    assert env["BII_STAGE_MANIFEST"] == "s3://b/stage/main.jsonl"
-
-
-def test_submit_array_single_is_not_array():
-    fake = _FakeBatch()
-    stage.submit_array("m", 1, "q", "jd", "n", client=fake)
-    assert "arrayProperties" not in fake.submissions[0]
-
-
 def test_run_batch_submits_one_array_for_all_units(stub, local_roots, monkeypatch):
     monkeypatch.setenv("BII_BATCH_QUEUE", "q")
     monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
@@ -164,6 +147,7 @@ def test_run_batch_submits_one_array_for_all_units(stub, local_roots, monkeypatc
 
     defs = [kw["jobDefinition"] for kw in fake.submissions]
     assert defs == ["jd"]  # a single array job for every unit, roads included
+    assert fake.submissions[0]["containerOverrides"]["command"] == ["bii-stage-worker"]
     # landcover would be index-in-place; here both assets consolidate.
     assert ("fake", None) in stub.consolidated and ("roads", None) in stub.consolidated
 

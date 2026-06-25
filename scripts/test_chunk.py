@@ -18,7 +18,7 @@ import sys
 
 from cog_worker import Manager, Worker
 
-from bii import config, process, s3io, stage
+from bii import config, orchestration, process
 
 CHUNKSIZE = 4096
 
@@ -48,9 +48,8 @@ def main(argv=None) -> dict:
     worker = Worker(**chunk)
     print(f"chunk: bounds={tuple(worker.bounds)} size={worker.width}x{worker.height}", file=sys.stderr)
 
-    muri = config.out_uri(run_id, "chunks.jsonl")
-    s3io.put_bytes((json.dumps(chunk) + "\n").encode(), muri)
-    stage.docker_run("bii", ["bii-process"], store=store, env={
+    muri = orchestration.write_manifest([chunk], config.out_uri(run_id, "chunks.jsonl"))
+    orchestration.docker_run("bii", ["bii-process"], store=store, env={
         "BII_CHUNKS_URI": muri, "BII_RUN_ID": run_id,
         "BII_START_YEAR": config.START_YEAR, "BII_END_YEAR": config.END_YEAR,
         "AWS_BATCH_JOB_ARRAY_INDEX": 0,
