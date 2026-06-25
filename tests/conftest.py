@@ -22,6 +22,15 @@ def local_staged(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def local_roots(tmp_path, monkeypatch):
+    """Redirect both the staged and output roots to local tmp dirs; return ``(staged, out)``."""
+    staged, out = str(tmp_path / "staged"), str(tmp_path / "out")
+    monkeypatch.setattr(config, "STAGED_ROOT", staged)
+    monkeypatch.setattr(config, "OUT_ROOT", out)
+    return staged, out
+
+
+@pytest.fixture
 def data_staged(request, monkeypatch):
     """Redirect the staged root to ``data/test_staged/<test_name>/`` for integration tests.
 

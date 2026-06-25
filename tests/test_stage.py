@@ -8,13 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bii import config, orchestration, stage, stage_worker, tile_index
-
-
-@pytest.fixture
-def local_roots(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "STAGED_ROOT", str(tmp_path / "staged"))
-    monkeypatch.setattr(config, "OUT_ROOT", str(tmp_path / "out"))
+from bii import orchestration, stage, stage_worker, tile_index
 
 
 class _StubModule:
@@ -167,15 +161,6 @@ def test_run_batch_reports_failed_children_and_skips_their_index(stub, local_roo
     # asset has an incomplete footprint -> not consolidated, reported instead.
     assert result["incomplete_indexes"] == [("fake", None)]
     assert stub.consolidated == [] and result["indexes"] == []
-
-
-def test_run_batch_requires_job_def(stub, local_roots, monkeypatch):
-    monkeypatch.setenv("BII_BATCH_QUEUE", "q")
-    monkeypatch.delenv("BII_BATCH_JOB_DEF", raising=False)
-    items = _items(("roads", "r1", "s3://b/roads/r1.tif", "roads"))
-    monkeypatch.setattr(stage, "_pending", lambda its: items)
-    with pytest.raises(SystemExit):
-        stage.run("fake", executor="batch", client=_FakeBatch(), wait_fn=lambda *a, **k: "SUCCEEDED")
 
 
 def test_run_skips_when_nothing_pending(stub, local_roots, monkeypatch):

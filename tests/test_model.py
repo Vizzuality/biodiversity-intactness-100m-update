@@ -1,14 +1,9 @@
 """Unit tests for the BII model math — no network, synthetic layers."""
 
-import importlib.util
-
 import numpy as np
 import pytest
 
 from bii import config, model
-
-_has_mahotas = importlib.util.find_spec("mahotas") is not None
-_needs_mahotas = pytest.mark.skipif(_has_mahotas is False, reason="mahotas not installed")
 
 
 class _FakeCRS:
@@ -72,7 +67,6 @@ def test_managed_forest_mask_decodes_fml_codes():
     assert mask.tolist() == [[[0, 0, 1, 1, 1, 1, 0, 0]]]
 
 
-@_needs_mahotas
 def test_calc_bii_product_form_and_masking():
     worker = _FakeWorker()
     layers = _synthetic_layers()
@@ -91,7 +85,6 @@ def test_calc_bii_product_form_and_masking():
     assert (bii.compressed() >= 0).all()
 
 
-@_needs_mahotas
 def test_calc_bii_return_all_includes_predictors():
     out = model.calc_bii(_FakeWorker(), _synthetic_layers(), year=2020, return_all=True)
     # return_all merges inputs + predictors + results.

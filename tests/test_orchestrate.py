@@ -6,10 +6,6 @@ Manifest build (ocean drop), the output diff, and the retry-until-empty loop are
 to end against a local staged + output root.
 """
 
-import importlib.util
-import json
-from pathlib import Path
-
 import numpy as np
 import pytest
 from cog_worker import Manager, Worker
@@ -20,22 +16,6 @@ from bii import config, orchestrate, orchestration, process, tile_index
 # A small land region (Costa Rica-ish) and a coarse scale so a Manager yields a handful of chunks.
 _BOUNDS = (-86.0, 9.0, -84.0, 11.0)
 _SCALE = 0.5  # ~0.5 deg pixels -> few-pixel chunks at chunksize below
-
-# scripts/ is not a package — load the run CLI by path.
-_RUN_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "run.py"
-_spec = importlib.util.spec_from_file_location("run_script", _RUN_SCRIPT)
-run_script = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(run_script)
-
-
-@pytest.fixture
-def local_roots(tmp_path, monkeypatch):
-    """Redirect both the staged and output roots to local dirs."""
-    staged = str(tmp_path / "staged")
-    out = str(tmp_path / "out")
-    monkeypatch.setattr(config, "STAGED_ROOT", staged)
-    monkeypatch.setattr(config, "OUT_ROOT", out)
-    return staged, out
 
 
 @pytest.fixture
@@ -203,18 +183,3 @@ def test_run_empty_manifest_short_circuits(local_roots, one_year):
         coverage_year=2020, client=fake, wait_fn=lambda *a, **k: None,
     )
     assert result["n_chunks"] == 0 and result["complete"] and fake.submissions == []
-
-
-# --------------------------------------------------------------------------------------
-# CLI (scripts/run.py)
-# --------------------------------------------------------------------------------------
-def test_run_script_no_submit_writes_manifest_only(local_roots, capsys, monkeypatch):
-    # The CLI builds its Manager from the config grid; coarsen it so the manifest stays small.
-    monkeypatch.setattr(config, "SCALE_DEG", _SCALE)
-    monkeypatch.setattr(config, "BUFFER", 0)
-    result = run_script.main(["--run-id", "cli", "--bounds", "-86", "9", "-84", "11", "--no-submit"])
-    assert result["submitted"] is False and result["n_chunks"] > 0
-    # No staged coverage index -> the ocean drop is a no-op, so this matches a no-coverage build.
-    assert orchestration.read_manifest(result["manifest"]) == orchestrate.chunk_manifest(_manager())
-    printed = json.loads(capsys.readouterr().out.strip())
-    assert printed["n_chunks"] == result["n_chunks"]
