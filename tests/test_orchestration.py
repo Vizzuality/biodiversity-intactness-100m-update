@@ -47,14 +47,14 @@ def test_submit_array_builds_array_job_with_command_env_and_retry(monkeypatch):
     monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
     fake = _FakeBatch()
     job_id = orchestration.submit_array(
-        size=5, job_name="n", command=["bii-stage-worker"],
+        size=5, job_name="n", command=["bii-stage"],
         environment={"BII_MANIFEST": "s3://b/m.jsonl"}, client=fake)
     assert job_id == "job-1"
     (kw,) = fake.submissions
     assert kw["arrayProperties"] == {"size": 5}
     assert kw["jobQueue"] == "q" and kw["jobDefinition"] == "jd"
     assert kw["retryStrategy"]["attempts"] == 3
-    assert kw["containerOverrides"]["command"] == ["bii-stage-worker"]
+    assert kw["containerOverrides"]["command"] == ["bii-stage"]
     env = {e["name"]: e["value"] for e in kw["containerOverrides"]["environment"]}
     assert env["BII_MANIFEST"] == "s3://b/m.jsonl"
 
@@ -80,10 +80,10 @@ def test_run_docker_one_container_per_line(monkeypatch):
     calls = []
     monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
-    failed = orchestration.run_docker(_items(2), ["bii-stage-worker"], manifest_uri="m",
+    failed = orchestration.run_docker(_items(2), ["bii-stage"], manifest_uri="m",
                                       env={"BII_RUN_ID": "v1"})
     assert failed == []
-    assert len(calls) == 2 and "img" in calls[0] and calls[0][-1] == "bii-stage-worker"
+    assert len(calls) == 2 and "img" in calls[0] and calls[0][-1] == "bii-stage"
     # the array index is the manifest line (mirrors Batch).
     assert "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[0] and "AWS_BATCH_JOB_ARRAY_INDEX=1" in calls[1]
     assert "BII_MANIFEST=m" in calls[0] and "BII_RUN_ID=v1" in calls[0]  # extra env forwarded
@@ -92,7 +92,7 @@ def test_run_docker_one_container_per_line(monkeypatch):
 def test_run_docker_continues_past_failure_and_reports_index(monkeypatch):
     monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: SimpleNamespace(returncode=2, stdout="boom"))
-    failed = orchestration.run_docker(_items(2), ["bii-stage-worker"], manifest_uri="m")
+    failed = orchestration.run_docker(_items(2), ["bii-stage"], manifest_uri="m")
     assert [f["index"] for f in failed] == [0, 1]
     # the failure error is the tail of the container's combined output.
     assert failed[0]["error"] == "boom"
@@ -105,7 +105,7 @@ def test_run_batch_success_returns_no_failures(monkeypatch):
     monkeypatch.setenv("BII_BATCH_QUEUE", "q")
     monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
     fake = _FakeBatch()
-    failed = orchestration.run_batch(_items(3), ["bii-stage-worker"], manifest_uri="m",
+    failed = orchestration.run_batch(_items(3), ["bii-stage"], manifest_uri="m",
                                      job_name="bii-stage",
                                      client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
     assert failed == []
@@ -116,7 +116,7 @@ def test_run_batch_reports_failed_children_by_index(monkeypatch):
     monkeypatch.setenv("BII_BATCH_QUEUE", "q")
     monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
     fake = _FakeBatch(failed_indices=[1])
-    failed = orchestration.run_batch(_items(2), ["bii-stage-worker"], manifest_uri="m",
+    failed = orchestration.run_batch(_items(2), ["bii-stage"], manifest_uri="m",
                                      job_name="bii-stage",
                                      client=fake, wait_fn=lambda *a, **k: "FAILED")
     assert [f["index"] for f in failed] == [1]
@@ -126,7 +126,7 @@ def test_run_batch_reports_failed_children_by_index(monkeypatch):
 def test_run_batch_single_failed_job_is_index_zero(monkeypatch):
     monkeypatch.setenv("BII_BATCH_QUEUE", "q")
     monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
-    failed = orchestration.run_batch(_items(1), ["bii-stage-worker"], manifest_uri="m",
+    failed = orchestration.run_batch(_items(1), ["bii-stage"], manifest_uri="m",
                                      job_name="bii-stage",
                                      client=_FakeBatch(), wait_fn=lambda *a, **k: "FAILED")
     assert failed == [{"index": 0, "error": "batch job failed"}]

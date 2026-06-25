@@ -3,7 +3,7 @@
 Enumerates every staging unit (one COG/tile/year per dataset), stages the ones whose output is
 missing (or all, with ``overwrite``) via :mod:`bii.orchestration`'s docker/Batch executors, and
 rebuilds each fully-staged asset's footprint index from its staged COGs. Both executors dispatch the
-``bii-stage-worker`` entrypoint (:func:`stage`) in this module — driver + worker together, mirroring
+``bii-stage`` entrypoint (:func:`stage`) in this module — driver + worker together, mirroring
 :mod:`bii.process`.
 
 A thin driver over :mod:`bii.staging`: each module exposes ``list_units`` / ``stage_unit`` and carries
@@ -51,7 +51,7 @@ def manifest_items(dataset: str | None = None, year: int | None = None) -> list[
 
 def stage(item: dict | None = None) -> None:
     """Stage one unit (always overwriting; the driver decides skip-if-exists). As the
-    ``bii-stage-worker`` container entrypoint, reads its unit from the manifest (``BII_MANIFEST`` +
+    ``bii-stage`` container entrypoint, reads its unit from the manifest (``BII_MANIFEST`` +
     array index) when called with no argument. Producing nothing (an ocean tile) is not a failure."""
     item = item or orchestration.manifest_line()
     MODULES[item["dataset"]].stage_unit(item["unit"])
@@ -85,7 +85,7 @@ def _failures(items: list[dict], failed: list[dict]) -> list[dict]:
 def _run(items: list[dict], executor: str, *, store=None, client=None, wait_fn=None) -> list[dict]:
     """Stage ``items`` via the chosen executor (one container per unit); return the failed units."""
     failed = orchestration.run_manifest(
-        items, ["bii-stage-worker"], executor=executor, manifest_uri=_manifest_uri(),
+        items, ["bii-stage"], executor=executor, manifest_uri=_manifest_uri(),
         job_name="bii-stage", store=store, client=client, wait_fn=wait_fn,
         label=lambda it: f"{it['dataset']} {it['unit']['id']}")
     return _failures(items, failed)

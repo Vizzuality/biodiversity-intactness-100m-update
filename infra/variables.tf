@@ -45,17 +45,11 @@ variable "job_memory" {
   default     = 16384
 }
 
-# Images default to the Tofu-created ECR repos at :latest. Pin to a digest
+# Image defaults to the Tofu-created ECR repo at :latest. Pin to a digest
 # (repo@sha256:...) here once scripts/push_images.sh has pushed, so Batch runs the exact image
 # you tested locally. null -> repo:latest (see locals in ecr.tf).
-variable "raster_image" {
-  description = "Image for processing + raster staging (null = <bii repo>:latest)."
-  type        = string
-  default     = null
-}
-
-variable "roads_image" {
-  description = "Image for OSM roads staging (null = <bii-roads repo>:latest)."
+variable "image" {
+  description = "Merged image for staging + processing (null = <bii repo>:latest)."
   type        = string
   default     = null
 }

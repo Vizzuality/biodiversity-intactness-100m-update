@@ -205,7 +205,7 @@ def run_manifest(items: list[dict], command: list[str], *, executor: str, manife
 
 def manifest_line() -> dict:
     """The manifest line this container handles — line ``AWS_BATCH_JOB_ARRAY_INDEX`` of the manifest
-    at ``BII_MANIFEST``. The worker entrypoints (``bii-process`` / ``bii-stage-worker``) read it."""
+    at ``BII_MANIFEST``. The worker entrypoints (``bii-process`` / ``bii-stage``) read it."""
     manifest = os.environ.get(MANIFEST_ENV)
     if not manifest:
         raise SystemExit(f"{MANIFEST_ENV} must point at the manifest")

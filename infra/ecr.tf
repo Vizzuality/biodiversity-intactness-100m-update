@@ -1,24 +1,13 @@
-# One repo per image. push_images.sh builds + pushes here; the job definitions reference these
-# repos (see locals). Untagged images expire so old layers don't accumulate.
-resource "aws_ecr_repository" "raster" {
+# Single repo for the merged image. push_images.sh builds + pushes here; both job definitions
+# reference it (see locals). Untagged images expire so old layers don't accumulate.
+resource "aws_ecr_repository" "this" {
   name                 = var.name # "bii"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
 }
 
-resource "aws_ecr_repository" "roads" {
-  name                 = "${var.name}-roads"
-  image_tag_mutability = "MUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-}
-
-resource "aws_ecr_lifecycle_policy" "raster" {
-  repository = aws_ecr_repository.raster.name
-  policy     = local.ecr_expire_untagged
-}
-
-resource "aws_ecr_lifecycle_policy" "roads" {
-  repository = aws_ecr_repository.roads.name
+resource "aws_ecr_lifecycle_policy" "this" {
+  repository = aws_ecr_repository.this.name
   policy     = local.ecr_expire_untagged
 }
 
@@ -31,7 +20,6 @@ locals {
       action       = { type = "expire" }
     }]
   })
-  # Job-definition images: a pinned digest from var, else the repo at :latest.
-  raster_image = coalesce(var.raster_image, "${aws_ecr_repository.raster.repository_url}:latest")
-  roads_image  = coalesce(var.roads_image, "${aws_ecr_repository.roads.repository_url}:latest")
+  # Job-definition image: a pinned digest from var, else the repo at :latest.
+  image = coalesce(var.image, "${aws_ecr_repository.this.repository_url}:latest")
 }

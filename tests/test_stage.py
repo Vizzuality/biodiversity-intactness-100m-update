@@ -102,7 +102,7 @@ def test_run_docker_one_container_per_unit(stub, local_roots, monkeypatch):
     # one image for all units; the array index is the manifest line (mirrors Batch).
     assert "img" in calls[0] and "img" in calls[1]
     assert "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[0] and "AWS_BATCH_JOB_ARRAY_INDEX=1" in calls[1]
-    assert calls[0][-1] == "bii-stage-worker"
+    assert calls[0][-1] == "bii-stage"
 
 
 def test_run_docker_continues_past_failure_and_reports_exception(stub, local_roots, monkeypatch):
@@ -135,7 +135,7 @@ def test_run_batch_submits_one_array_for_all_units(stub, local_roots, monkeypatc
 
     defs = [kw["jobDefinition"] for kw in fake.submissions]
     assert defs == ["jd"]  # a single array job for every unit, roads included
-    assert fake.submissions[0]["containerOverrides"]["command"] == ["bii-stage-worker"]
+    assert fake.submissions[0]["containerOverrides"]["command"] == ["bii-stage"]
     # landcover would be index-in-place; here both assets consolidate.
     assert ("fake", None) in stub.consolidated and ("roads", None) in stub.consolidated
 

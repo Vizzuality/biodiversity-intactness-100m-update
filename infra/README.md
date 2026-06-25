@@ -1,9 +1,9 @@
 # infra — AWS Batch stack (OpenTofu)
 
 Greenfield stack for running BII staging + processing on AWS Batch (EC2 Spot): the account's
-default VPC, two S3 buckets (`vizz-bii` outputs + `vizz-bii-processing` staged inputs), two ECR
-repos, IAM, one compute environment + queue, and two job definitions. Region comes from
-`AWS_REGION` (the same `.env` the pipeline uses).
+default VPC, two S3 buckets (`vizz-bii` outputs + `vizz-bii-processing` staged inputs), one ECR
+repo, IAM, one compute environment + queue, and two job definitions (`bii-process`, `bii-stage`,
+both on the one merged image). Region comes from `AWS_REGION` (the same `.env` the pipeline uses).
 
 State is **local** (`terraform.tfstate` in this dir, gitignored). For a shared/remote setup, add an
 S3 backend block and `tofu init -migrate-state` — deferred until more than one operator needs it.
@@ -13,22 +13,21 @@ S3 backend block and `tofu init -migrate-state` — deferred until more than one
 ```sh
 cd infra
 tofu init
-tofu apply                      # creates VPC, bucket, ECR repos, Batch (job defs -> repo:latest)
+tofu apply                      # creates VPC, bucket, ECR repo, Batch (job defs -> repo:latest)
 
 cd ..
-./scripts/push_images.sh        # build + push bii / bii-roads; prints the digests
+./scripts/push_images.sh        # build + push the bii image; prints the digest
 
 cd infra
-tofu apply \                    # re-point job defs at the exact pushed digests
-  -var "raster_image=<bii digest>" \
-  -var "roads_image=<bii-roads digest>"
+tofu apply \                    # re-point job defs at the exact pushed digest
+  -var "image=<bii digest>"
 ```
 
 Then wire the outputs into `.env`:
 
 ```sh
 tofu output    # batch_job_queue -> BII_BATCH_QUEUE, batch_job_def -> BII_BATCH_JOB_DEF,
-               # batch_roads_job_def -> BII_BATCH_ROADS_JOB_DEF
+               # batch_stage_job_def -> BII_BATCH_STAGE_JOB_DEF
 ```
 
 `tofu apply` with no `-var` leaves the job defs on `:latest` — fine for a first run, but pinning the

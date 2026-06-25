@@ -5,23 +5,18 @@ output "batch_job_queue" {
 }
 
 output "batch_job_def" {
-  description = "BII_BATCH_JOB_DEF (processing + raster staging)"
-  value       = aws_batch_job_definition.raster.name
+  description = "BII_BATCH_JOB_DEF (processing)"
+  value       = aws_batch_job_definition.process.name
 }
 
-output "batch_roads_job_def" {
-  description = "BII_BATCH_ROADS_JOB_DEF"
-  value       = aws_batch_job_definition.roads.name
+output "batch_stage_job_def" {
+  description = "BII_BATCH_STAGE_JOB_DEF (staging)"
+  value       = aws_batch_job_definition.stage.name
 }
 
-output "ecr_raster_repo" {
-  description = "Push target + BII_STAGE_IMAGE base (raster/processing)"
-  value       = aws_ecr_repository.raster.repository_url
-}
-
-output "ecr_roads_repo" {
-  description = "Push target + BII_STAGE_ROADS_IMAGE base (roads)"
-  value       = aws_ecr_repository.roads.repository_url
+output "ecr_repo" {
+  description = "Push target + BII_STAGE_IMAGE base"
+  value       = aws_ecr_repository.this.repository_url
 }
 
 output "bucket" {

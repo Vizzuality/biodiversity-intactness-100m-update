@@ -36,14 +36,14 @@ resource "aws_batch_job_queue" "this" {
   }
 }
 
-# Raster image: processing (default command bii-process) + raster staging (command overridden to
-# bii-stage-worker at submit by bii.stage). Roads image: OSM staging only.
-resource "aws_batch_job_definition" "raster" {
-  name                  = var.name
+# Both definitions run the one merged image (processing tools + osmctools); they differ only in the
+# default command. bii-process processes; bii-stage stages every input dataset (OSM included).
+resource "aws_batch_job_definition" "process" {
+  name                  = "${var.name}-process"
   type                  = "container"
   platform_capabilities = ["EC2"]
   container_properties = jsonencode({
-    image      = local.raster_image
+    image      = local.image
     command    = ["bii-process"]
     jobRoleArn = aws_iam_role.job.arn
     resourceRequirements = [
@@ -55,19 +55,19 @@ resource "aws_batch_job_definition" "raster" {
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.batch.name
         "awslogs-region"        = data.aws_region.current.name
-        "awslogs-stream-prefix" = var.name
+        "awslogs-stream-prefix" = "${var.name}-process"
       }
     }
   })
 }
 
-resource "aws_batch_job_definition" "roads" {
-  name                  = "${var.name}-roads"
+resource "aws_batch_job_definition" "stage" {
+  name                  = "${var.name}-stage"
   type                  = "container"
   platform_capabilities = ["EC2"]
   container_properties = jsonencode({
-    image      = local.roads_image
-    command    = ["bii-stage-worker"]
+    image      = local.image
+    command    = ["bii-stage"]
     jobRoleArn = aws_iam_role.job.arn
     resourceRequirements = [
       { type = "VCPU", value = tostring(var.job_vcpu) },
@@ -78,7 +78,7 @@ resource "aws_batch_job_definition" "roads" {
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.batch.name
         "awslogs-region"        = data.aws_region.current.name
-        "awslogs-stream-prefix" = "${var.name}-roads"
+        "awslogs-stream-prefix" = "${var.name}-stage"
       }
     }
   })
