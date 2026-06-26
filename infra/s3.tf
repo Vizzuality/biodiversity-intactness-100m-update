@@ -8,8 +8,6 @@ resource "aws_s3_bucket" "processing" {
   bucket = var.processing_bucket
 }
 
-# ACLs stay blocked on both buckets; the outputs bucket allows a public-read *policy* (see below) so
-# its out/ + source/ prefixes can serve anonymously, while processing stays fully private.
 resource "aws_s3_bucket_public_access_block" "this" {
   for_each = {
     outputs    = { id = aws_s3_bucket.outputs.id, block_policy = false }
@@ -22,8 +20,7 @@ resource "aws_s3_bucket_public_access_block" "this" {
   restrict_public_buckets = each.value.block_policy
 }
 
-# Anonymous read of the published prefixes only: out/ (final COGs) and source/ (published source
-# data). Everything else in the bucket stays private.
+# Public read of the published prefixes only: out/ (final COGs) and source/ 
 resource "aws_s3_bucket_policy" "outputs_public" {
   bucket     = aws_s3_bucket.outputs.id
   depends_on = [aws_s3_bucket_public_access_block.this]
@@ -46,8 +43,7 @@ resource "aws_s3_bucket_versioning" "outputs" {
   }
 }
 
-# Outputs: keep current versions forever; expire old versions and stalled uploads so versioning
-# doesn't accrue cost.
+# Outputs: keep current versions forever
 resource "aws_s3_bucket_lifecycle_configuration" "outputs" {
   bucket = aws_s3_bucket.outputs.id
   rule {
@@ -59,14 +55,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "outputs" {
   }
 }
 
-# Processing: regenerable, so delete objects outright after 30 days.
+
 resource "aws_s3_bucket_lifecycle_configuration" "processing" {
   bucket = aws_s3_bucket.processing.id
   rule {
     id     = "expire"
-    status = "Enabled"
+    status = "Disabled"
     filter {}
-    expiration { days = 30 }
+    expiration { days = 90 }
     abort_incomplete_multipart_upload { days_after_initiation = 7 }
   }
 }

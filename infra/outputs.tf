@@ -28,3 +28,8 @@ output "processing_bucket" {
   description = "Staged inputs/index (PROCESSING_BUCKET)"
   value       = aws_s3_bucket.processing.bucket
 }
+
+output "local_user" {
+  description = "Service account for local Docker; generate access keys manually"
+  value       = aws_iam_user.local.name
+}

@@ -31,10 +31,10 @@ from . import s3io
 _POLL_SECONDS = 30.0
 # Env var naming the manifest URI inside a worker container; the array index selects the line.
 MANIFEST_ENV = "BII_MANIFEST"
-# Host env forwarded into docker containers (S3 creds + staging tokens; -e NAME passes the value).
+# Host env forwarded into docker containers (S3 creds; -e NAME passes the value).
 _FORWARD_ENV = (
     "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN", "AWS_PROFILE", "BII_EOG_COOKIE",
+    "AWS_SESSION_TOKEN", "AWS_PROFILE",
 )
 
 

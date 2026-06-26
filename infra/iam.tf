@@ -56,3 +56,14 @@ resource "aws_iam_role_policy" "job_s3" {
     ]
   })
 }
+
+# Service account for running test_chunk --remote locally (e.g. in Docker).
+resource "aws_iam_user" "local" {
+  name = "${var.bucket}-local-s3"
+}
+
+resource "aws_iam_user_policy" "local_s3" {
+  name = "s3"
+  user = aws_iam_user.local.name
+  policy = aws_iam_role_policy.job_s3.policy
+}

@@ -4,10 +4,11 @@
 Builds a ``cog_worker`` ``Manager`` over the AOI, takes its first chunk, and runs ``bii-process``
 on that chunk inside the production ``bii`` image — the *identical* code path a Batch array index
 runs. Inputs are read from the locally staged store by default (``--staged``, bind-mounted into the
-container, mirroring ``stage_local.py``), or from the remote S3 store with ``--remote``.
+container, mirroring ``stage_local.py``), or from the remote S3 store with ``--remote`` (which still
+writes its outputs to the local ``--staged`` dir, so a remote read needs only read-only S3 creds).
 
     python scripts/test_chunk.py                          # central Spain, 2020, ./data/staged_local
-    python scripts/test_chunk.py --remote                 # read staged inputs from S3 instead
+    python scripts/test_chunk.py --remote                 # read staged inputs from S3, write local
 """
 from __future__ import annotations
 
@@ -37,10 +38,10 @@ def main(argv=None) -> dict:
 
     config.START_YEAR = config.END_YEAR = args.year
     run_id = config.RUN_ID
-    store = None
+    store = os.path.abspath(args.staged)
+    config.OUT_ROOT = store
     if not args.remote:
-        store = os.path.abspath(args.staged)
-        config.STAGED_ROOT = config.OUT_ROOT = store
+        config.STAGED_ROOT = store
 
     manager = Manager(bounds=tuple(args.bounds), scale=config.SCALE_DEG, proj=config.PROJ, buffer=config.BUFFER)
     params = list(manager.chunk_params(CHUNKSIZE))
@@ -49,11 +50,14 @@ def main(argv=None) -> dict:
     print(f"chunk: bounds={tuple(worker.bounds)} size={worker.width}x{worker.height}", file=sys.stderr)
 
     muri = orchestration.write_manifest([chunk], config.out_uri(run_id, "chunks.jsonl"))
-    orchestration.docker_run("bii", ["bii-process"], store=store, env={
+    env = {
         "BII_MANIFEST": muri, "BII_RUN_ID": run_id,
         "BII_START_YEAR": config.START_YEAR, "BII_END_YEAR": config.END_YEAR,
         "AWS_BATCH_JOB_ARRAY_INDEX": 0,
-    })
+    }
+    if args.remote:
+        env["BII_STAGED_ROOT"] = config.STAGED_ROOT  # read inputs from S3, overriding the mount
+    orchestration.docker_run("bii", ["bii-process"], store=store, env=env)
 
     outputs = [process.output_uri(run_id, layer, worker) for layer in process.output_layers()]
     result = {"run_id": run_id, "bounds": list(worker.bounds), "outputs": outputs}
