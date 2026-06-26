@@ -171,6 +171,12 @@ def wait_for_array(job_id: str, *, client=None) -> str:
         time.sleep(_POLL_SECONDS)
 
 
+def terminate_job(job_id: str, *, client=None, reason: str = "orchestrator interrupted") -> None:
+    """Terminate ``job_id`` (cancels not-yet-started children and kills running ones), so an
+    interrupted orchestrator doesn't leave the array job draining the queue and spending."""
+    batch_client(client).terminate_job(jobId=job_id, reason=reason)
+
+
 def failed_children(job_id: str, client=None) -> dict[int, str]:
     """``{array-child index: failure detail}`` for the children of ``job_id`` that ended FAILED after
     retries (paginated). Detail is the status / container exit code / reason from the summary."""
@@ -203,11 +209,16 @@ def run_batch(items: list[dict], command: list[str], *, manifest_uri: str, env: 
     """Submit the manifest as one Batch array job running ``command``, wait for it, and return the
     lines whose child ended FAILED after retries (``{"index", "error"}``) — parity with
     ``run_docker``'s non-zero-exit failures. ``env`` is extra container environment. A unit that
-    produces nothing exits 0, not failed."""
+    produces nothing exits 0, not failed. An interrupt while waiting terminates the job first."""
     wait_fn = wait_fn or wait_for_array
     job_id = submit_array(size=len(items), job_name=job_name, command=command,
                           environment={MANIFEST_ENV: manifest_uri, **(env or {})}, client=client)
-    if wait_fn(job_id, client=client) == "FAILED":  # a non-array job (size 1) is just index 0
+    try:
+        status = wait_fn(job_id, client=client)
+    except BaseException:
+        terminate_job(job_id, client=client)
+        raise
+    if status == "FAILED":  # a non-array job (size 1) is just index 0
         detail = {0: "batch job failed"} if len(items) == 1 else failed_children(job_id, client)
         return [{"index": i, "error": detail[i]} for i in sorted(detail)]
     return []

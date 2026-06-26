@@ -143,9 +143,8 @@ def test_process_writes_all_layers_unconditionally(local_out, one_year, monkeypa
 # --------------------------------------------------------------------------------------
 # Driver — manifest build (ocean drop), skip-done, run/retry loop
 # --------------------------------------------------------------------------------------
-def test_manifest_uri_names_retry_rounds(local_out):
-    assert process.manifest_uri("v1", 0).endswith("/v1/chunks.jsonl")
-    assert process.manifest_uri("v1", 2).endswith("/v1/chunks_retry2.jsonl")
+def test_manifest_uri(local_out):
+    assert process.manifest_uri("v1").endswith("/v1/chunks.jsonl")
 
 
 def test_chunk_manifest_keeps_all_chunks_without_coverage_index(local_roots):
@@ -179,26 +178,18 @@ def test_run_converges_when_no_failures(local_roots, one_year, batch_env):
     result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(),
                          client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
     assert result["complete"] and result["failed"] == 0
-    assert len(result["rounds"]) == 1 and len(fake.submissions) == 1
+    assert len(fake.submissions) == 1
     env = _env(fake.submissions[0])
     assert env["BII_RUN_ID"] == "v1" and "BII_MANIFEST" in env  # run id + manifest forwarded
     assert fake.submissions[0]["containerOverrides"]["command"] == ["bii-process"]
 
 
-def test_run_retries_failed_chunk_then_converges(local_roots, one_year, batch_env):
-    fake = _FakeBatch(fail_first=[0])  # round 0: the first chunk's child ends FAILED
-
-    def wait_fn(job_id, *, client=None):
-        return "FAILED" if len(fake.submissions) == 1 else "SUCCEEDED"
-
-    chunks = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
+def test_run_reports_failed_chunk_without_resubmitting(local_roots, one_year, batch_env):
+    fake = _FakeBatch(fail_first=[0])  # the first chunk's child ends FAILED after Batch's own retries
     result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(),
-                         client=fake, wait_fn=wait_fn, max_rounds=5)
-    assert result["complete"] and result["failed"] == 0
-    assert len(result["rounds"]) == 2 and result["rounds"][0]["failed"] == 1
-    # the retry round resubmitted only the single failed chunk (size 1 -> non-array job).
-    assert "arrayProperties" not in fake.submissions[1]
-    assert orchestration.read_manifest(_env(fake.submissions[1])["BII_MANIFEST"]) == chunks[:1]
+                         client=fake, wait_fn=lambda *a, **k: "FAILED")
+    assert not result["complete"] and result["failed"] == 1
+    assert len(fake.submissions) == 1  # the failed chunk is not resubmitted
 
 
 def test_run_skips_chunks_already_written_unless_overwrite(local_roots, one_year, batch_env):

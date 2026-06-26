@@ -30,10 +30,9 @@ def main(argv=None) -> dict:
     if args.dry_run:
         items = stage.manifest_items(args.dataset, args.year)
         have = stage.staged_dsts(items)
-        units = [{"dataset": it["dataset"], "id": it["unit"]["id"], "dst": it["unit"]["dst"],
-                  "exists": it["unit"]["dst"] in have}
-                 for it in items]
-        result = {"planned": len(units), "exists": sum(u["exists"] for u in units), "units": units}
+        units = [{"dataset": it["dataset"], "id": it["unit"]["id"], "dst": it["unit"]["dst"]}
+                 for it in items if it["unit"]["dst"] not in have]
+        result = {"planned": len(items), "pending": len(units), "units": units}
     else:
         result = stage.run(args.dataset, args.year, executor=args.executor, overwrite=args.overwrite)
     print(json.dumps(result))

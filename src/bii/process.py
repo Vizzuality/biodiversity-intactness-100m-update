@@ -2,7 +2,7 @@
 
 The per-chunk worker and the run driver live together because they share the output layout:
 :func:`process` computes one chunk and writes its layer COGs; :func:`run` builds the chunk manifest,
-fans it out via the shared docker/Batch executors in :mod:`bii.orchestration`, and resubmits the
+fans it out via the shared docker/Batch executors in :mod:`bii.orchestration`, and reports the
 chunks that failed. Mirrors :mod:`bii.stage` (driver + worker in one module):
 
 * **worker** — :func:`process` rebuilds a :class:`cog_worker.Worker` from a ``chunk_params`` dict,
@@ -10,8 +10,8 @@ chunks that failed. Mirrors :mod:`bii.stage` (driver + worker in one module):
   key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` (ports the notebook's ``persist_cog`` to
   S3/boto3). It always overwrites — the skip-if-exists decision lives in :func:`run`.
 * **driver** — :func:`run` drops non-finite and ocean chunks, skips chunks already fully written
-  (unless ``overwrite``, mirroring ``stage._pending``), fans the rest out, and retries the failed
-  lines until none remain.
+  (unless ``overwrite``, mirroring ``stage._pending``), fans the rest out, and reports the failed
+  lines (Batch retries each child internally; rerun to pick them up via skip-if-exists).
 
 A chunk is JSON-serializable, so the manifest is plain JSONL and array index N maps to line N — the
 same contract :func:`process` (the ``bii-process`` container command) consumes.
@@ -97,10 +97,8 @@ def process(chunk: dict | None = None, run_id: str | None = None) -> None:
 # --------------------------------------------------------------------------------------
 # Driver — manifest build (drop non-finite + ocean), skip-done, fan out, retry failed
 # --------------------------------------------------------------------------------------
-def manifest_uri(run_id: str, round_: int = 0) -> str:
-    """``chunks.jsonl`` for the initial run, ``chunks_retry<n>.jsonl`` for each retry round."""
-    name = "chunks.jsonl" if round_ == 0 else f"chunks_retry{round_}.jsonl"
-    return config.out_uri(run_id, name)
+def manifest_uri(run_id: str) -> str:
+    return config.out_uri(run_id, "chunks.jsonl")
 
 
 def _coverage(assets: tuple[str, ...], year: int) -> gpd.GeoDataFrame | None:
@@ -163,18 +161,18 @@ def run(
     coverage_year: int | None = None,
     executor: str = "batch",
     overwrite: bool = False,
-    max_rounds: int = 5,
     submit: bool = True,
     store: str | None = None,
     client=None,
     wait_fn=None,
 ) -> dict:
     """Build the manifest and (when ``submit``) run it via ``executor`` (``docker`` locally / ``batch``
-    on AWS), retrying the chunks whose container/child failed until complete or ``max_rounds``.
+    on AWS), reporting the chunks whose container/child failed. Failed chunks are not resubmitted —
+    Batch already retries each child (``attempts=3``); rerun ``run`` to pick them up via skip-if-exists.
 
     Chunks already fully written are skipped unless ``overwrite``. ``submit=False`` writes only the
     manifest — the size gate before any Batch spend. ``store`` is the local stand-in store for the
-    docker executor; ``wait_fn`` is injectable so the Batch loop can be driven synchronously in tests."""
+    docker executor; ``wait_fn`` is injectable so the Batch wait can be driven synchronously in tests."""
     run_id = run_id or config.RUN_ID
     chunks = chunk_manifest(manager, chunksize, coverage_assets=coverage_assets, coverage_year=coverage_year)
     pending = chunks if overwrite else _pending(chunks, run_id)
@@ -185,18 +183,11 @@ def run(
                 "manifest": manifest_uri(run_id), "submitted": bool(pending) and submit,
                 "complete": not pending}
 
-    remaining, rounds = pending, []
-    for r in range(max_rounds):
-        n = len(remaining)
-        failed = orchestration.run_manifest(
-            remaining, ["bii-process"], executor=executor, manifest_uri=manifest_uri(run_id, r),
-            job_name=f"bii-{run_id}", env={"BII_RUN_ID": run_id}, store=store,
-            label=lambda c: f"chunk {c['proj_bounds']}", client=client, wait_fn=wait_fn)
-        remaining = [remaining[f["index"]] for f in failed]
-        rounds.append({"round": r, "submitted": n, "failed": len(remaining)})
-        if not remaining:
-            break
+    failed = orchestration.run_manifest(
+        pending, ["bii-process"], executor=executor, manifest_uri=manifest_uri(run_id),
+        job_name=f"bii-{run_id}", env={"BII_RUN_ID": run_id}, store=store,
+        label=lambda c: f"chunk {c['proj_bounds']}", client=client, wait_fn=wait_fn)
 
     return {"run_id": run_id, "n_chunks": len(chunks), "pending": len(pending),
-            "manifest": manifest_uri(run_id), "rounds": rounds, "failed": len(remaining),
-            "complete": not remaining, "submitted": True}
+            "manifest": manifest_uri(run_id), "failed": len(failed),
+            "complete": not failed, "submitted": True}

@@ -25,6 +25,9 @@ class _FakeBatch:
              "container": {"exitCode": 1, "reason": "OutOfMemoryError"}}
             for i in self._failed]}
 
+    def terminate_job(self, **kwargs):
+        self.terminated = kwargs["jobId"]
+
 
 def _items(n):
     return [{"id": i} for i in range(n)]
@@ -123,6 +126,20 @@ def test_run_batch_reports_failed_children_by_index(monkeypatch):
                                      client=fake, wait_fn=lambda *a, **k: "FAILED")
     assert [f["index"] for f in failed] == [1]
     assert failed[0]["error"] == "FAILED: exit 1: OutOfMemoryError"
+
+
+def test_run_batch_terminates_job_on_interrupt(monkeypatch):
+    monkeypatch.setenv("BII_BATCH_QUEUE", "q")
+    monkeypatch.setenv("BII_BATCH_JOB_DEF", "jd")
+    fake = _FakeBatch()
+
+    def wait_fn(job_id, *, client=None):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        orchestration.run_batch(_items(3), ["bii-stage"], manifest_uri="m", job_name="n",
+                                client=fake, wait_fn=wait_fn)
+    assert fake.terminated == "job-1"
 
 
 def test_run_batch_single_failed_job_is_index_zero(monkeypatch):
