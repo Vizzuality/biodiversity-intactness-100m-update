@@ -94,12 +94,6 @@ def _pending(items: list[dict]) -> list[dict]:
             if it["unit"]["dst"] not in have and it["unit"]["dst"] + EMPTY_MARKER not in have]
 
 
-def print_summary(items: list[dict], pending: list[dict]) -> None:
-    """Per-execution job summary on stderr (stdout stays JSON)."""
-    print(f"staging {len(pending)} of {len(items)} units "
-          f"({len(items) - len(pending)} skipped, already staged)", file=sys.stderr)
-
-
 def _manifest_uri() -> str:
     # Unique per run: Batch workers read the manifest lazily at runtime, so a fixed name would let a
     # later run's manifest clobber the lines an in-flight job still has to read.
@@ -159,7 +153,8 @@ def run(dataset: str | None = None, year: int | None = None, *, items: list[dict
     the local stand-in store for the docker executor."""
     items = manifest_items(dataset, year) if items is None else items
     pending = items if overwrite else _pending(items)
-    print_summary(items, pending)
+    print(f"staging {len(pending)} of {len(items)} units "
+          f"({len(items) - len(pending)} skipped, already staged)", file=sys.stderr)
     if not pending:
         return {"planned": len(items), "pending": 0, "executor": executor, "failed": [],
                 "incomplete_indexes": [], "indexes": []}

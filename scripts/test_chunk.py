@@ -45,7 +45,7 @@ def main(argv=None) -> dict:
 
     manager = Manager(bounds=tuple(args.bounds), scale=config.SCALE_DEG, proj=config.PROJ, buffer=config.BUFFER)
     params = list(manager.chunk_params(CHUNKSIZE))
-    chunk = json.loads(json.dumps(dict(params[0], proj_bounds=list(params[0]["proj_bounds"]))))
+    chunk = dict(params[0], proj_bounds=list(params[0]["proj_bounds"]))
     worker = Worker(**chunk)
     print(f"chunk: bounds={tuple(worker.bounds)} size={worker.width}x{worker.height}", file=sys.stderr)
 

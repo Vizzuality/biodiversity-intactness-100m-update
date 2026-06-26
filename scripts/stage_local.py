@@ -14,20 +14,18 @@ Staging runs through ``bii.stage``'s docker executor — the same manifest + arr
 contract as AWS Batch, with a bind-mounted local dir standing in for the S3 store:
 
     python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --staged ./data/staged_local
-    python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --build   # build image first
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 from shapely.geometry import box
 
 from bii import config, stage
-from bii.staging import roads, sdpt, worldpop
+from bii.staging import roads, sdpt
 
 COUNTRY_BOUNDS = os.path.join(os.path.dirname(__file__), "data", "country_bounds.json")
 
@@ -54,12 +52,7 @@ def _roads_ids(aoi) -> set:
     return set(gdf[gdf.intersects(box(*aoi))]["id"])
 
 
-def _wrap(name: str, units: list[dict]) -> list[dict]:
-    """Wrap a module's units as orchestrator manifest items ``{dataset, unit, asset, year}``."""
-    return [stage.manifest_item(name, u) for u in units]
-
-
-def _aoi_items(datasets, year, aoi, cbounds, countries, regions, road_ids) -> list[dict]:
+def _aoi_items(datasets, year, aoi, cbounds, countries, regions) -> list[dict]:
     """The AOI-scoped manifest items per dataset (dataset modules untouched). worldpop/sdpt units
     are *generated* for the AOI's countries via ``list_units(countries=/regions=)`` — not filtered
     from the module's partial default list — so any country the source covers is reachable."""
@@ -70,6 +63,7 @@ def _aoi_items(datasets, year, aoi, cbounds, countries, regions, road_ids) -> li
         if name == "hansen":
             units = [u for u in mod.list_units() if _intersects(_hansen_bounds(u), aoi)]
         elif name == "roads":
+            road_ids = _roads_ids(aoi)
             units = [u for u in mod.list_units() if u["id"] in road_ids]
         elif name == "worldpop":
             units = mod.list_units(countries=sorted(countries or aoi_isos), years=[year])
@@ -80,7 +74,7 @@ def _aoi_items(datasets, year, aoi, cbounds, countries, regions, road_ids) -> li
             units = mod.list_units(years=[year])
         else:  # travel_time, fml — single global file
             units = mod.list_units()
-        items += _wrap(name, units)
+        items += [stage.manifest_item(name, u) for u in units]
     return items
 
 
@@ -94,7 +88,6 @@ def main(argv=None) -> dict:
     p.add_argument("--countries", nargs="*", help="ISO3 override for worldpop (default: from bbox table)")
     p.add_argument("--regions", nargs="*", help="region override for sdpt (default: from bbox table)")
     p.add_argument("--dataset", choices=sorted(stage.MODULES), help="stage only this dataset (default: all)")
-    p.add_argument("--build", action="store_true", help="docker build the bii image first")
     p.add_argument("--overwrite", action="store_true", help="restage units whose output already exists")
     p.add_argument("--dry-run", action="store_true", help="list the AOI-selected units and exit")
     args = p.parse_args(argv)
@@ -111,10 +104,9 @@ def main(argv=None) -> dict:
     cbounds = json.load(open(COUNTRY_BOUNDS))
     countries = {c.upper() for c in args.countries} if args.countries else None
     regions = {r.upper() for r in args.regions} if args.regions else None
-    road_ids = _roads_ids(aoi)
     datasets = [args.dataset] if args.dataset else list(stage.MODULES)
 
-    items = _aoi_items(datasets, args.year, aoi, cbounds, countries, regions, road_ids)
+    items = _aoi_items(datasets, args.year, aoi, cbounds, countries, regions)
 
     if args.dry_run:
         pending = items if args.overwrite else stage._pending(items)
@@ -122,9 +114,6 @@ def main(argv=None) -> dict:
                   "units": [{"dataset": it["dataset"], "id": it["unit"]["id"]} for it in items]}
         print(json.dumps(result))
         return result
-
-    if args.build:
-        subprocess.run(["docker", "build", "-t", "bii", "-f", "Dockerfile", "."], check=True)
 
     result = {"staged_root": staged,
               **stage.run(items=items, executor="docker", overwrite=args.overwrite, store=staged)}

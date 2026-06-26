@@ -6,9 +6,9 @@ fans it out via the shared docker/Batch executors in :mod:`bii.orchestration`, a
 chunks that failed. Mirrors :mod:`bii.stage` (driver + worker in one module):
 
 * **worker** — :func:`process` rebuilds a :class:`cog_worker.Worker` from a ``chunk_params`` dict,
-  runs :func:`bii.model.compute_all`, and writes each ``<metric>_<year>`` layer to the deterministic
-  key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` (ports the notebook's ``persist_cog`` to
-  S3/boto3). It always overwrites — the skip-if-exists decision lives in :func:`run`.
+  runs :func:`bii.model.compute_all`, and writes each ``bii_<year>`` layer to the deterministic
+  key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` via :func:`bii.s3io.staged_local_path`.
+  It always overwrites — the skip-if-exists decision lives in :func:`run`.
 * **driver** — :func:`run` drops non-finite and ocean chunks, skips chunks already fully written
   (unless ``overwrite``, mirroring ``stage._pending``), fans the rest out, and reports the failed
   lines (Batch retries each child internally; rerun to pick them up via skip-if-exists).
@@ -29,26 +29,20 @@ from shapely.geometry import box
 from . import config, model, orchestration, s3io, tile_index
 from .staging import cog
 
-# The metrics :func:`bii.model.calc_bii` returns per year; ``compute_all`` emits one COG per
-# ``<metric>_<year>``. Kept here (not imported from model) only as the layer-key source —
-# it must stay in sync with calc_bii's result keys.
-BII_METRICS = ("abundance", "community_similarity", "bii")
-
-# GDAL read tuning for the remote source reads inside compute_all: caches off so a Batch
-# worker's memory stays bounded, retries on transient HTTP failures. Shared with staging.
-READ_ENV = cog.GDAL_READ_ENV
-
-# Any chunk overlapping a staged landcover or roads footprint is land we must process; one
-# overlapping neither is open water and is dropped.
-COVERAGE_ASSETS = ("landcover", "roads")
+# A chunk overlapping no staged landcover footprint can only produce nodata (landcover is the
+# model's nodata mask), so it's dropped as open water. landcover alone is the right predicate:
+# it covers all land we can output, whereas roads only re-cover land landcover already has while
+# adding hundreds of footprints — some globe-spanning, for antimeridian-crossing regions — that
+# loosen the drop for no coverage gain.
+COVERAGE_ASSETS = ("landcover",)
 
 
 # --------------------------------------------------------------------------------------
 # Output layout
 # --------------------------------------------------------------------------------------
 def output_layers() -> list[str]:
-    """The ``<metric>_<year>`` layer keys one chunk produces — the keys of ``compute_all``."""
-    return [f"{metric}_{year}" for year in config.years() for metric in BII_METRICS]
+    """The ``bii_<year>`` layer keys one chunk produces — the keys of ``compute_all``."""
+    return [f"bii_{year}" for year in config.years()]
 
 
 def _coord(v: float) -> str:
@@ -68,29 +62,26 @@ def output_uri(run_id: str, layer: str, worker: Worker) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# Worker — compute one chunk, persist its layer COGs (ports notebook 3's persist_cog)
+# Worker — compute one chunk, write its layer COGs
 # --------------------------------------------------------------------------------------
-def persist_cog(worker: Worker, arr: np.ndarray, uri: str) -> None:
-    """Write ``arr`` (cast to float32) as a COG to ``uri`` (S3 or local) via an in-memory rasterio
-    ``MemoryFile`` — no temp file. ``worker.write`` clips the buffer and carries the nodata mask.
-    Always overwrites; the skip-if-exists decision lives in :func:`run`."""
-    arr = arr.astype(np.float32)
-    with rio.MemoryFile() as memfile:
-        worker.write(arr, memfile, driver="COG", overview_resampling="average")
-        data = memfile.read()
-    s3io.put_bytes(data, uri)
-
-
 def process(chunk: dict | None = None, run_id: str | None = None) -> None:
-    """Compute BII for one chunk and persist every output layer (always overwriting; :func:`run` is
-    what skips chunks already written). As the ``bii-process`` container entrypoint, reads its chunk
-    from the manifest (``BII_MANIFEST`` + array index) when called with no argument."""
+    """Compute BII for one chunk and write every output layer as a COG, always overwriting (:func:`run`
+    is what skips chunks already written). As the ``bii-process`` container entrypoint, reads its chunk
+    from the manifest (``BII_MANIFEST`` + array index) when called with no argument.
+
+    Each layer is written straight to its destination via :func:`bii.s3io.staged_local_path` — the COG
+    driver builds overviews on a local temp file regardless, so an in-memory file buys nothing.
+    ``worker.write`` clips the buffer, carries the nodata mask, and keeps the array's float32 dtype.
+    """
     chunk = chunk or orchestration.manifest_line()
     run_id = run_id or config.RUN_ID
     worker = Worker(**chunk)
-    with rio.Env(**READ_ENV):
+    # GDAL read tuning for the remote source reads in compute_all: caches off so a Batch worker's
+    # memory stays bounded, retries on transient HTTP failures.
+    with rio.Env(**cog.GDAL_READ_ENV):
         for key, arr in model.compute_all(worker):
-            persist_cog(worker, arr, output_uri(run_id, key, worker))
+            with s3io.staged_local_path(output_uri(run_id, key, worker)) as out:
+                worker.write(arr, out, driver="COG", overview_resampling="average")
 
 
 # --------------------------------------------------------------------------------------

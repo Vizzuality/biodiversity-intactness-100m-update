@@ -18,7 +18,7 @@ import rasterio as rio
 from rio_cogeo.cogeo import cog_validate
 
 from bii import tile_index
-from bii.staging import iolulc, roads, sdpt, worldpop
+from bii.staging import cog, iolulc, roads, sdpt, worldpop
 
 pytestmark = pytest.mark.integration
 
@@ -61,7 +61,7 @@ def test_stage_sdpt_country(data_staged):
 
     # SDPT shares the forestManagement asset with FML; the index finds the staged tile.
     tile_index.index_cogs("forestManagement")
-    w, s, e, n = tile_index.cog_footprint(dst)
+    w, s, e, n = cog.footprint(dst, tile_index.INDEX_CRS)
     mid = ((w + e) / 2, (s + n) / 2)
     hits = tile_index.lookup("forestManagement", (mid[0], mid[1], mid[0] + 0.01, mid[1] + 0.01))
     assert dst in hits
@@ -108,7 +108,7 @@ def _check_roads_region():
     assert arr.max() == 1  # highways burned
 
     tile_index.index_cogs("roads")
-    w, s, e, n = tile_index.cog_footprint(dst)
+    w, s, e, n = cog.footprint(dst, tile_index.INDEX_CRS)
     mid = ((w + e) / 2, (s + n) / 2)
     hits = tile_index.lookup("roads", (mid[0], mid[1], mid[0] + 0.01, mid[1] + 0.01))
     assert dst in hits

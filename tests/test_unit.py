@@ -72,7 +72,7 @@ def test_translate_to_cog(local_staged, tmp_path):
     with rio.open(dst) as out:
         assert out.crs.to_epsg() == 4326
         assert out.dtypes[0] == "uint8"
-    fp = tile_index.cog_footprint(dst)
+    fp = cog.footprint(dst, tile_index.INDEX_CRS)
     assert fp[0] == pytest.approx(-85.0, abs=1e-6)
     assert fp[3] == pytest.approx(9.0 + n * res, abs=1e-6)
 
@@ -153,7 +153,7 @@ def test_rasterize_to_cog_polygon_and_line(local_staged, tmp_path):
     assert set(np.unique(arr)).issubset({0, 1})
     assert arr.sum() > 0
     # Footprint snaps outward, so it covers the requested bounds.
-    fp = tile_index.cog_footprint(dst)
+    fp = cog.footprint(dst, tile_index.INDEX_CRS)
     assert fp[0] <= bounds[0] and fp[3] >= bounds[3]
 
     # A thin diagonal line still burns (all_touched=True) -> no dropout.
@@ -222,7 +222,7 @@ def test_sdpt_stage_unit_reads_bounds_from_source(local_staged, tmp_path, monkey
     assert sdpt.stage_unit({"id": "x", "region": "x", "layer": "plant"}) is True  # no bounds
     dst = sdpt._dst("x")
     # The footprint snaps outward from the layer's own extent — it encloses the polygon.
-    w, s, e, n = tile_index.cog_footprint(dst)
+    w, s, e, n = cog.footprint(dst, tile_index.INDEX_CRS)
     assert w <= 10.0 and s <= 45.0 and e >= 10.3 and n >= 45.3
     assert _open_cog_band(dst).sum() > 0
 

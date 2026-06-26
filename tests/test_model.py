@@ -37,8 +37,8 @@ def _synthetic_layers(n=24):
     roads[0, n // 2, n // 2] = 1  # a single road cell so distance transform has a target
 
     return {
-        # forestManagement arrives pre-normalized to a 0/1 mask (read_static_assets does this).
-        "forestManagement": (rng.random(shape) > 0.7).astype(float),
+        # forestManagement is raw FML codes; _predictors decodes managed forest (>30 & <55).
+        "forestManagement": masked(rng.integers(0, 60, shape).astype(np.int16)),
         "accessibility": masked(rng.random(shape) * 2000),
         "roads": roads,
         "forestLoss": masked(rng.integers(0, 24, shape).astype(np.int16)),
@@ -60,11 +60,17 @@ def test_convolve_preserves_band_shape():
     assert out == pytest.approx(1.0)  # focal mean of a constant field is the constant
 
 
-def test_managed_forest_mask_decodes_fml_codes():
-    # FML managed-forest is codes >30 & <55; everything else is unmanaged.
-    codes = np.array([[[11, 20, 31, 32, 40, 53, 55, 0]]], np.int16)
-    mask = model._managed_forest_mask(np.ma.MaskedArray(codes, mask=False))
-    assert mask.tolist() == [[[0, 0, 1, 1, 1, 1, 0, 0]]]
+def test_predictors_decode_managed_forest():
+    # FML managed-forest is codes >30 & <55; forestManagement_100m is the focal mean of that
+    # decoded mask, so an all-managed field gives ~1 and an unmanaged field ~0.
+    base = _synthetic_layers()
+
+    def fm_predictor(code):
+        layers = base | {"forestManagement": np.ma.MaskedArray(np.full((1, 24, 24), code, np.int16), mask=False)}
+        return dict(model._static_predictors(layers, config.SCALE_METERS))["forestManagement_100m"]
+
+    assert fm_predictor(40) == pytest.approx(1.0)  # managed
+    assert fm_predictor(11) == pytest.approx(0.0)  # unmanaged
 
 
 def test_calc_bii_product_form_and_masking():

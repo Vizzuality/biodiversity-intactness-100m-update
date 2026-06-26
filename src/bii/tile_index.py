@@ -20,10 +20,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import geopandas as gpd
-import pandas as pd
 from shapely.geometry import box, shape
 
 from . import config, s3io
+from .staging import cog
 
 INDEX_CRS = "EPSG:4326"
 
@@ -62,29 +62,13 @@ def _to_gdf(footprints) -> gpd.GeoDataFrame:
 # --------------------------------------------------------------------------------------
 # Build / rebuild-from-COGs
 # --------------------------------------------------------------------------------------
-def build_index(asset: str, footprints, year: int | None = None, append: bool = False) -> str:
+def build_index(asset: str, footprints, year: int | None = None) -> str:
     """Write ``{geometry, uri}`` GeoParquet for ``asset``. ``footprints`` is an iterable of
     ``(uri, geometry | (west, south, east, north))``. Dedupes by uri."""
-    gdf = _to_gdf(footprints)
+    gdf = _to_gdf(footprints).drop_duplicates(subset="uri").reset_index(drop=True)
     uri = index_uri(asset, year)
-    if append and s3io.exists(uri):
-        gdf = gpd.GeoDataFrame(
-            pd.concat([gpd.read_parquet(uri), gdf], ignore_index=True),
-            crs=INDEX_CRS,
-        )
-    gdf = gdf.drop_duplicates(subset="uri", keep="last").reset_index(drop=True)
     _write_parquet(gdf, uri)
     return uri
-
-
-def cog_footprint(uri: str) -> tuple[float, float, float, float]:
-    """Read a staged COG's EPSG:4326 footprint ``(west, south, east, north)`` from its header."""
-    import rasterio as rio
-    from rasterio.warp import transform_bounds
-
-    from .staging.cog import GDAL_READ_ENV
-    with rio.Env(**GDAL_READ_ENV), rio.open(uri) as s:
-        return tuple(transform_bounds(s.crs, INDEX_CRS, *s.bounds))
 
 
 def _asset_cogs(asset: str, year: int | None) -> list[str]:
@@ -101,7 +85,8 @@ def index_cogs(asset: str, year: int | None = None) -> str:
         raise FileNotFoundError(f"no staged COGs for {asset} {year or ''}".strip())
     # Footprints are independent network reads; sequential rio.open over S3 stalls on large assets.
     with ThreadPoolExecutor(max_workers=16) as ex:
-        return build_index(asset, zip(uris, ex.map(cog_footprint, uris)), year=year)
+        footprints = ex.map(lambda u: cog.footprint(u, INDEX_CRS), uris)
+        return build_index(asset, zip(uris, footprints), year=year)
 
 
 # --------------------------------------------------------------------------------------

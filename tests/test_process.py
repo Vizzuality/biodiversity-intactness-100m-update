@@ -14,7 +14,7 @@ import rasterio as rio
 from cog_worker import Manager, Worker
 from rio_cogeo.cogeo import cog_validate
 
-from bii import config, orchestration, process, tile_index
+from bii import config, orchestration, process, s3io, tile_index
 
 # A tiny EPSG:4326 chunk (coarse scale, no buffer) so synthetic layers are 10x10.
 _CHUNK = {"proj": "EPSG:4326", "scale": 0.1, "buffer": 0, "proj_bounds": (-86.0, 9.0, -85.0, 10.0)}
@@ -33,7 +33,7 @@ def local_out(tmp_path, monkeypatch):
 
 @pytest.fixture
 def one_year(monkeypatch):
-    """Restrict the year range to 2020 so a run produces just 3 layers (faster, easier asserts)."""
+    """Restrict the year range to 2020 so a run produces just one layer (faster, easier asserts)."""
     monkeypatch.setattr(config, "START_YEAR", 2020)
     monkeypatch.setattr(config, "END_YEAR", 2020)
 
@@ -65,7 +65,8 @@ def _write_outputs(chunks, run_id):
             mask=np.zeros((1, worker.height, worker.width), bool),
         )
         for layer in process.output_layers():
-            process.persist_cog(worker, arr, process.output_uri(run_id, layer, worker))
+            with s3io.staged_local_path(process.output_uri(run_id, layer, worker)) as out:
+                worker.write(arr, out, driver="COG", overview_resampling="average")
 
 
 class _FakeBatch:
@@ -93,10 +94,10 @@ def _env(submission):
 # --------------------------------------------------------------------------------------
 # Worker — output layout, persist, compute
 # --------------------------------------------------------------------------------------
-def test_output_layers_are_metric_year_keys():
+def test_output_layers_are_bii_year_keys():
     layers = process.output_layers()
-    assert len(layers) == len(process.BII_METRICS) * len(config.years())
-    assert "bii_2024" in layers and "abundance_2017" in layers
+    assert layers == [f"bii_{y}" for y in config.years()]
+    assert "bii_2024" in layers and "abundance_2017" not in layers  # only bii is persisted
 
 
 def test_output_uri_is_deterministic_and_north_west_named(local_out):
@@ -107,31 +108,17 @@ def test_output_uri_is_deterministic_and_north_west_named(local_out):
     assert process.output_uri("v1", "bii_2020", worker) == uri  # stable across calls
 
 
-def test_persist_cog_writes_valid_cog_and_overwrites(local_out):
-    worker = Worker(**_CHUNK)
-    arr = np.ma.MaskedArray(np.ones((1, 10, 10), np.float32), mask=np.zeros((1, 10, 10), bool))
-    uri = process.output_uri("v1", "bii_2020", worker)
-
-    process.persist_cog(worker, arr, uri)
-    valid, errors, _ = cog_validate(uri)
-    assert valid, errors
-    with rio.open(uri) as src:
-        assert src.dtypes[0] == "float32"
-        assert src.crs.to_epsg() == 4326
-
-    process.persist_cog(worker, arr, uri)  # always overwrites (no skip) -> still a valid COG
-    assert cog_validate(uri)[0]
-
-
 def test_process_writes_all_layers_unconditionally(local_out, one_year, monkeypatch):
     monkeypatch.setattr(process.model, "compute_all", _stub_compute_all)
     process.process(_CHUNK, run_id="v1")
     worker = Worker(**_CHUNK)
     uris = [process.output_uri("v1", layer, worker) for layer in process.output_layers()]
-    assert len(uris) == 3
+    assert len(uris) == 1  # one_year -> just bii_2020
     for uri in uris:
         valid, errors, _ = cog_validate(uri)
         assert valid, errors
+        with rio.open(uri) as src:  # float32 (no cast) EPSG:4326 COG
+            assert src.dtypes[0] == "float32" and src.crs.to_epsg() == 4326
 
     # The skip lives in run(), not the worker: a rerun recomputes rather than short-circuiting.
     calls = []

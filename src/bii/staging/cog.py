@@ -29,6 +29,7 @@ import numpy as np
 import rasterio as rio
 import rasterio.shutil
 import requests
+from rasterio.warp import transform_bounds
 
 from .. import config, s3io
 
@@ -41,6 +42,12 @@ GDAL_READ_ENV = dict(
     GDAL_HTTP_RETRY_DELAY="1",
 )
 
+
+def footprint(uri: str, dst_crs: str) -> tuple[float, float, float, float]:
+    """Read ``uri``'s raster footprint from its header, reprojected to ``dst_crs``
+    ``(west, south, east, north)`` — how :func:`bii.tile_index.index_cogs` builds the index."""
+    with rio.Env(**GDAL_READ_ENV), rio.open(uri) as s:
+        return tuple(transform_bounds(s.crs, dst_crs, *s.bounds))
 
 
 def fetch(url: str, headers: dict | None = None, suffix: str | None = None) -> str:
