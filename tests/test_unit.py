@@ -244,6 +244,8 @@ def test_roads_manifest_units():
     ids = {u["id"] for u in units}
     assert roads.GEOFABRIK_DROP_IDS.isdisjoint(ids)
     assert "us/delaware" in ids and "us" not in ids
+    # greater-london's only Geofabrik sub-region (enfield) has no public PBF, so the parent is kept.
+    assert "greater-london" in ids and "enfield" not in ids
 
 
 def _open_cog_band(uri, band=1):

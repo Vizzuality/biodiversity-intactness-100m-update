@@ -1,7 +1,8 @@
 """Stage OSM roads -> per-region 100 m burn-1 highway mask COG + footprint index (single-epoch).
 
 Roads feed ``ln(distRoads + 1)``; one recent snapshot is reused across all years. The fan-out
-unit is a Geofabrik leaf region (vendored manifest ``geofabrik-index-v1-child.geojson``), one
+unit is a Geofabrik leaf region (derived in :func:`_manifest` from the vendored
+``geofabrik-index-v1.geojson``), one
 Batch job per region. Per region we download the ``.osm.pbf`` to ephemeral disk (a vector
 source can't be pure-streamed), filter to vehicular ``highway`` ways, and rasterize to a 100 m
 burn-1 mask on the BII grid.
@@ -34,23 +35,28 @@ from . import cog
 
 ASSET = "roads"
 
-# Geofabrik leaf-region manifest (vendored FeatureCollection of {id, parent, name, pbf} +
-# geometry) — the work-list, so list_units needs no network.
+# Geofabrik region index, vendored verbatim from the source (FeatureCollection of all regions,
+# flattened to {id, parent, name, pbf} + geometry) so list_units needs no network. All row-dropping
+# happens here in :func:`_manifest`, not in the file.
 GEOFABRIK_INDEX = os.path.join(
-    os.path.dirname(__file__), "data", "geofabrik-index-v1-child.geojson"
+    os.path.dirname(__file__), "data", "geofabrik-index-v1.geojson"
 )
-# Geofabrik leaf regions whose extents duplicate the union of their children. The vendored index
-# already applies Geofabrik's parent-exclusion dedup (e.g. `california` is replaced by
-# `norcal`/`socal`), but these macro-extents still overlap their children fully — rasterizing
-# them would be redundant multi-GB downloads — so they're excluded from the work-list. This is the
-# rasterize-osm notebook's manual `drop_ids` supplement. Children give full coverage:
-# whole-US/US-census-regions -> `us/<state>`, GB unions -> English counties + scotland/wales,
-# `dach` -> German states + austria/switzerland, `alps` -> member countries, etc.
+# Macro regions kept as leaves by the derivation (no sub-regions) but whose extents still fully
+# overlap finer regions also in the work-list — rasterizing them would be redundant multi-GB
+# downloads, so they're dropped. Finer regions give full coverage: whole-US/US-census-regions ->
+# `us/<state>`, GB unions -> English counties + scotland/wales, `dach` -> German states +
+# austria/switzerland, `alps` -> member countries, etc. `enfield` is Geofabrik's only sub-region of
+# `greater-london` but has no public PBF and covers one borough, so it's dropped in favour of its
+# parent (see GEOFABRIK_KEEP_PARENTS).
 GEOFABRIK_DROP_IDS = frozenset({
     "us", "us-south", "us-midwest", "us-northeast", "us-pacific", "us-west",
     "great-britain", "britain-and-ireland", "united-kingdom",
     "alps", "dach", "baden-wuerttemberg", "south-africa-and-lesotho", "indonesia",
+    "enfield",
 })
+# Parent regions force-kept in the work-list even though they have sub-regions: their children
+# don't tile/cover them (or aren't downloadable), so the parent's own extract is needed instead.
+GEOFABRIK_KEEP_PARENTS = frozenset({"greater-london"})
 
 # OSM highway filter, applied by osmfilter. Highways are kept, then tunnels and non-vehicular
 # sub-types are dropped — footpaths, cycleways, tracks, etc. aren't "roads" for distRoads. Mirrors
@@ -75,7 +81,11 @@ def _manifest() -> gpd.GeoDataFrame:
     global _manifest_cache
     if _manifest_cache is None:
         gdf = gpd.read_file(GEOFABRIK_INDEX)
-        gdf = gdf[~gdf["id"].isin(GEOFABRIK_DROP_IDS)].reset_index(drop=True)
+        # Work-list = Geofabrik leaf regions (not a parent of any other region) plus force-kept
+        # parents, minus the redundant/undownloadable drops.
+        parents = set(gdf["parent"].dropna())
+        leaf = ~gdf["id"].isin(parents) | gdf["id"].isin(GEOFABRIK_KEEP_PARENTS)
+        gdf = gdf[leaf & ~gdf["id"].isin(GEOFABRIK_DROP_IDS)].reset_index(drop=True)
         _manifest_cache = gdf
     return _manifest_cache
 
