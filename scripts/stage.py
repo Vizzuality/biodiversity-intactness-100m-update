@@ -6,6 +6,7 @@ Batch queue/job-def and the docker image name come from the environment (``BII_B
 
     python scripts/stage.py --dataset roads --executor docker     # test the images locally
     python scripts/stage.py --executor batch                      # fan out on AWS Batch
+    python scripts/stage.py --index-only --executor batch         # rebuild indexes only, no staging
 """
 from __future__ import annotations
 
@@ -24,6 +25,8 @@ def main(argv=None) -> dict:
     parser.add_argument("--executor", choices=("docker", "batch"), default="docker",
                         help="where to run units (default: docker locally)")
     parser.add_argument("--overwrite", action="store_true", help="restage units whose output already exists")
+    parser.add_argument("--index-only", action="store_true",
+                        help="skip staging; just rebuild the footprint indexes from staged COGs")
     parser.add_argument("--dry-run", action="store_true", help="list the planned units + existence and exit")
     args = parser.parse_args(argv)
 
@@ -32,6 +35,8 @@ def main(argv=None) -> dict:
         units = [{"dataset": it["dataset"], "id": it["unit"]["id"], "dst": it["unit"]["dst"]}
                  for it in stage._pending(items)]
         result = {"planned": len(items), "pending": len(units), "units": units}
+    elif args.index_only:
+        result = stage.reindex(args.dataset, args.year, executor=args.executor)
     else:
         result = stage.run(args.dataset, args.year, executor=args.executor, overwrite=args.overwrite)
     print(json.dumps(result))

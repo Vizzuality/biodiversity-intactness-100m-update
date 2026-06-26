@@ -1,10 +1,11 @@
 """Staging driver: enumerate staging units, run the missing ones, rebuild footprint indexes.
 
 Enumerates every staging unit (one COG/tile/year per dataset), stages the ones whose output is
-missing (or all, with ``overwrite``) via :mod:`bii.orchestration`'s docker/Batch executors, and
-rebuilds each fully-staged asset's footprint index from its staged COGs. Both executors dispatch the
-``bii-stage`` entrypoint (:func:`stage`) in this module — driver + worker together, mirroring
-:mod:`bii.process`.
+missing (or all, with ``overwrite``) via :mod:`bii.orchestration`'s docker/Batch executors, then
+rebuilds each fully-staged asset's footprint index from its staged COGs as a second fan-out over the
+same executor (so the COG-header reads run cloud-adjacent on Batch). Both phases dispatch entrypoints
+in this module — ``bii-stage`` (:func:`stage`) and ``bii-index`` (:func:`index`) — driver + worker
+together, mirroring :mod:`bii.process`.
 
 A thin driver over :mod:`bii.staging`: each module exposes ``list_units`` / ``stage_unit`` and carries
 ``dst`` + ``ASSET``, so this module stays dataset-agnostic. The skip-if-exists decision lives in the
@@ -65,6 +66,18 @@ def stage(item: dict | None = None) -> None:
         s3io.put_bytes(b"", item["unit"]["dst"] + EMPTY_MARKER)
 
 
+def index(item: dict | None = None) -> None:
+    """Rebuild one asset's footprint index from its staged COGs — the ``bii-index`` consolidation
+    worker. As an entrypoint it reads its ``{asset, year}`` from the manifest. Run on the executor so
+    the COG-header reads are cloud-adjacent on Batch. An asset that staged only ocean tiles has no
+    COGs, so there is nothing to index — not a failure."""
+    item = item or orchestration.manifest_line()
+    try:
+        tile_index.index_cogs(item["asset"], item["year"])
+    except FileNotFoundError:
+        pass
+
+
 def staged_dsts(items: list[dict]) -> set[str]:
     """The ``dst`` URIs already staged, listing only the per-asset prefixes ``items`` span (every dst
     is ``staged_uri(asset, ...)``) — one listing per asset rather than a HEAD per unit, and a
@@ -112,15 +125,25 @@ def _run(items: list[dict], executor: str, *, store=None, client=None, wait_fn=N
     return _failures(items, failed)
 
 
-def _consolidate(assets) -> list[str]:
-    """Rebuild each ``(asset, year)`` index from its staged COGs; skip assets with none staged."""
-    out = []
-    for asset, yr in sorted(assets, key=lambda a: (a[0], a[1] or 0)):
-        try:
-            out.append(tile_index.index_cogs(asset, yr))
-        except FileNotFoundError:
-            pass
-    return out
+def reindex(dataset: str | None = None, year: int | None = None, *, executor: str = "docker",
+            store: str | None = None, client=None, wait_fn=None) -> dict:
+    """Rebuild the footprint indexes for the selected datasets from their staged COGs, without
+    staging — the index fan-out on its own (e.g. after a manual restage, or to repair an index)."""
+    todo = sorted({(it["asset"], it["year"]) for it in manifest_items(dataset, year)
+                   if it["dataset"] not in INDEX_IN_PLACE}, key=lambda a: (a[0], a[1] or 0))
+    failed = _index(todo, executor, store=store, client=client, wait_fn=wait_fn) if todo else []
+    return {"executor": executor, "indexes": [a for a in todo if a not in failed], "failed": failed}
+
+
+def _index(pairs: list[tuple], executor: str, *, store=None, client=None, wait_fn=None) -> list[tuple]:
+    """Rebuild each ``(asset, year)`` index via the chosen executor (one ``bii-index`` container per
+    pair, so the reads are cloud-adjacent on Batch); return the pairs whose index task failed."""
+    items = [{"asset": a, "year": y} for a, y in pairs]
+    failed = orchestration.run_manifest(
+        items, ["bii-index"], executor=executor, manifest_uri=_manifest_uri(),
+        job_name="bii-index", store=store, client=client, wait_fn=wait_fn,
+        label=lambda it: f"index {it['asset']} {it['year'] or ''}".strip())
+    return [pairs[f["index"]] for f in failed]
 
 
 # --------------------------------------------------------------------------------------
@@ -148,6 +171,8 @@ def run(dataset: str | None = None, year: int | None = None, *, items: list[dict
     # ocean-drop (real land chunks dropped), so leave that asset's prior index.
     assets = {(it["asset"], it["year"]) for it in pending if it["dataset"] not in INDEX_IN_PLACE}
     incomplete = {(f["asset"], f["year"]) for f in failed}
+    todo = sorted(assets - incomplete, key=lambda a: (a[0], a[1] or 0))
+    index_failed = _index(todo, executor, store=store, client=client, wait_fn=wait_fn) if todo else []
     return {"planned": len(items), "pending": len(pending), "executor": executor, "failed": failed,
-            "incomplete_indexes": sorted(incomplete & assets, key=lambda a: (a[0], a[1] or 0)),
-            "indexes": _consolidate(assets - incomplete)}
+            "incomplete_indexes": sorted(incomplete & assets, key=lambda a: (a[0], a[1] or 0)) + index_failed,
+            "indexes": [a for a in todo if a not in index_failed]}

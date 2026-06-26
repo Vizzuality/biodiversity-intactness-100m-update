@@ -35,6 +35,7 @@ dev = [
 # Container worker entrypoints (the docker/Batch commands). The orchestrator CLIs live in scripts/.
 [project.scripts]
 bii-stage = "bii.stage:stage"
+bii-index = "bii.stage:index"
 bii-process = "bii.process:process"
 
 [build-system]

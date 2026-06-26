@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bii import config, orchestration, s3io, stage, tile_index
+from bii import config, orchestration, s3io, stage
 
 
 class _StubModule:
@@ -32,11 +32,6 @@ class _StubModule:
 def stub(monkeypatch):
     mod = _StubModule()
     monkeypatch.setitem(stage.MODULES, "fake", mod)
-    # index_cogs would list + read COG headers; stub it to just record the (asset, year) pairs.
-    calls = []
-    monkeypatch.setattr(tile_index, "index_cogs",
-                        lambda asset, year=None: calls.append((asset, year)) or f"idx:{asset}")
-    mod.consolidated = calls
     return mod
 
 
@@ -113,11 +108,14 @@ def test_run_docker_one_container_per_unit(stub, local_roots, monkeypatch):
 
     result = stage.run("fake", executor="docker")
 
-    assert len(calls) == 2 and result["failed"] == []
+    assert result["failed"] == []
     # one image for all units; the array index is the manifest line (mirrors Batch).
     assert "img" in calls[0] and "img" in calls[1]
     assert "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[0] and "AWS_BATCH_JOB_ARRAY_INDEX=1" in calls[1]
     assert calls[0][-1] == "bii-stage"
+    # two staging containers, then one bii-index container per consolidated (asset, year).
+    assert [c[-1] for c in calls] == ["bii-stage", "bii-stage", "bii-index", "bii-index"]
+    assert result["indexes"] == [("fake", None), ("roads", None)]
 
 
 def test_run_docker_continues_past_failure_and_reports_exception(stub, local_roots, monkeypatch):
@@ -146,13 +144,14 @@ def test_run_batch_submits_one_array_for_all_units(stub, local_roots, monkeypatc
                    ("roads", "r1", "s3://b/roads/r1.tif", "roads"))
     monkeypatch.setattr(stage, "_pending", lambda its: items)
 
-    stage.run("fake", executor="batch", client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
+    result = stage.run("fake", executor="batch", client=fake, wait_fn=lambda *a, **k: "SUCCEEDED")
 
-    defs = [kw["jobDefinition"] for kw in fake.submissions]
-    assert defs == ["jd"]  # a single array job for every unit, roads included
-    assert fake.submissions[0]["containerOverrides"]["command"] == ["bii-stage"]
+    # one staging array for every unit (roads included), then one index array for the assets.
+    cmds = [kw["containerOverrides"]["command"] for kw in fake.submissions]
+    assert cmds == [["bii-stage"], ["bii-index"]]
+    assert all(kw["jobDefinition"] == "jd" for kw in fake.submissions)
     # landcover would be index-in-place; here both assets consolidate.
-    assert ("fake", None) in stub.consolidated and ("roads", None) in stub.consolidated
+    assert result["indexes"] == [("fake", None), ("roads", None)]
 
 
 def test_run_batch_reports_failed_children_and_skips_their_index(stub, local_roots, monkeypatch):
@@ -169,7 +168,20 @@ def test_run_batch_reports_failed_children_and_skips_their_index(stub, local_roo
     assert result["failed"][0]["error"] == "FAILED: exit 1: OutOfMemoryError"
     # asset has an incomplete footprint -> not consolidated, reported instead.
     assert result["incomplete_indexes"] == [("fake", None)]
-    assert stub.consolidated == [] and result["indexes"] == []
+    assert result["indexes"] == []
+    assert len(fake.submissions) == 1  # only the staging array; no index array dispatched
+
+
+def test_reindex_dispatches_index_only_without_staging(stub, local_roots, monkeypatch):
+    calls = []
+    monkeypatch.setattr(orchestration.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
+
+    result = stage.reindex("fake", executor="docker")
+
+    # no bii-stage containers; one bii-index container per (asset, year), no staging.
+    assert [c[-1] for c in calls] == ["bii-index"]
+    assert result["indexes"] == [("fake", None)] and result["failed"] == []
 
 
 def test_run_skips_when_nothing_pending(stub, local_roots, monkeypatch):

@@ -17,6 +17,8 @@ so landcover joins the staged backend instead of a live per-chunk search.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import box, shape
@@ -97,7 +99,9 @@ def index_cogs(asset: str, year: int | None = None) -> str:
     uris = _asset_cogs(asset, year)
     if not uris:
         raise FileNotFoundError(f"no staged COGs for {asset} {year or ''}".strip())
-    return build_index(asset, [(u, cog_footprint(u)) for u in uris], year=year)
+    # Footprints are independent network reads; sequential rio.open over S3 stalls on large assets.
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        return build_index(asset, zip(uris, ex.map(cog_footprint, uris)), year=year)
 
 
 # --------------------------------------------------------------------------------------
