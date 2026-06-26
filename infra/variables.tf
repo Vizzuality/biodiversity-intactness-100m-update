@@ -23,12 +23,12 @@ variable "max_vcpus" {
 }
 
 # Memory-optimized (1:8 vCPU:mem, matches job_vcpu:job_memory) with local NVMe instance store for
-# scratch (see launch_template.tf). r6id is current gen; r5d/r5dn widen the Spot pool for
-# CAPACITY_OPTIMIZED. x86 only — the images are x86, so don't add Graviton (r7gd/r6gd) here.
+# scratch (see launch_template.tf). r8gd is current gen; r7gd/r6gd widen the Spot pool for
+# CAPACITY_OPTIMIZED. arm64 only — the image is arm64, so don't add x86 (r6id/r5d) here.
 variable "instance_types" {
-  description = "Instance families Batch may launch (R-family current gen, NVMe-backed)."
+  description = "Instance families Batch may launch (Graviton R-family, NVMe-backed)."
   type        = list(string)
-  default     = ["r6id", "r5d", "r5dn"]
+  default     = ["r8gd", "r7gd", "r6gd"]
 }
 
 variable "job_vcpu" {
@@ -37,12 +37,13 @@ variable "job_vcpu" {
   default     = 2
 }
 
-# ~4x the arrays at the larger raster size. Starting point — tune against a real chunk. Kept at a
-# 1:8 ratio with job_vcpu so R-family instances pack with no idle vCPU or memory.
+# ~4x the arrays at the larger raster size. Starting point — tune against a real chunk. Held ~1 GiB
+# under 8 GiB/vCPU so a job fits the smallest instance (.large) after kernel + ECS-agent reserve, and
+# 2/4/8 jobs pack the .xlarge/.2xlarge/.4xlarge at full vCPU.
 variable "job_memory" {
   description = "MiB of memory per job."
   type        = number
-  default     = 16384
+  default     = 15360
 }
 
 # Image defaults to the Tofu-created ECR repo at :latest. Pin to a digest
