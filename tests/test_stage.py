@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bii import orchestration, stage, tile_index
+from bii import config, orchestration, s3io, stage, tile_index
 
 
 class _StubModule:
@@ -74,6 +74,21 @@ def test_manifest_items_records_asset_for_consolidation(stub):
 def test_stage_dispatches_to_module_by_manifest_line(stub):
     stage.stage(stage.manifest_items("fake")[1])  # second unit
     assert stub.staged == ["u2"]
+
+
+def test_stage_writes_empty_marker_when_unit_produces_nothing(local_roots, monkeypatch):
+    dst = config.staged_uri("fake", "u1.tif")
+    monkeypatch.setitem(stage.MODULES, "fake",
+                        SimpleNamespace(ASSET="fake", stage_unit=lambda unit: False))
+    stage.stage({"dataset": "fake", "unit": {"id": "u1", "dst": dst}, "asset": "fake", "year": None})
+    assert s3io.exists(dst + stage.EMPTY_MARKER) and not s3io.exists(dst)
+
+
+def test_pending_skips_unit_whose_empty_marker_exists(local_roots):
+    dst1, dst2 = config.staged_uri("fake", "u1.tif"), config.staged_uri("fake", "u2.tif")
+    s3io.put_bytes(b"", dst1 + stage.EMPTY_MARKER)  # u1 staged nothing last run -> marker only
+    pending = stage._pending(_items(("fake", "u1", dst1, "fake"), ("fake", "u2", dst2, "fake")))
+    assert [it["unit"]["id"] for it in pending] == ["u2"]
 
 
 def test_stage_reads_the_indexed_unit_from_env(stub, local_roots, monkeypatch):

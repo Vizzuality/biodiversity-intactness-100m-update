@@ -25,6 +25,11 @@ from .staging import MODULES
 # landcover builds its index in place (STAC hrefs, no COGs) -> rebuild-exempt.
 INDEX_IN_PLACE = ("iolulc",)
 
+# Sentinel sibling of a unit's dst: a unit that legitimately staged nothing (an ocean Hansen tile
+# 404s) writes this so skip-if-exists treats it as done instead of refetching it every run. Not a
+# ``.tif``, so tile_index ignores it when rebuilding the footprint index from staged COGs.
+EMPTY_MARKER = ".empty"
+
 
 def _list_units(module, year: int | None) -> list[dict]:
     """``module.list_units`` filtered to ``year`` when the module is per-year, else its full list."""
@@ -53,9 +58,11 @@ def manifest_items(dataset: str | None = None, year: int | None = None) -> list[
 def stage(item: dict | None = None) -> None:
     """Stage one unit (always overwriting; the driver decides skip-if-exists). As the
     ``bii-stage`` container entrypoint, reads its unit from the manifest (``BII_MANIFEST`` +
-    array index) when called with no argument. Producing nothing (an ocean tile) is not a failure."""
+    array index) when called with no argument. Producing nothing (an ocean tile) is not a failure —
+    it writes an ``EMPTY_MARKER`` sentinel so skip-if-exists won't refetch it next run."""
     item = item or orchestration.manifest_line()
-    MODULES[item["dataset"]].stage_unit(item["unit"])
+    if not MODULES[item["dataset"]].stage_unit(item["unit"]):
+        s3io.put_bytes(b"", item["unit"]["dst"] + EMPTY_MARKER)
 
 
 def staged_dsts(items: list[dict]) -> set[str]:
@@ -67,9 +74,11 @@ def staged_dsts(items: list[dict]) -> set[str]:
 
 
 def _pending(items: list[dict]) -> list[dict]:
-    """Items whose output ``dst`` does not yet exist (the skip-if-exists filter)."""
+    """Items whose output ``dst`` (or its ``EMPTY_MARKER`` sentinel) does not yet exist (the
+    skip-if-exists filter)."""
     have = staged_dsts(items)
-    return [it for it in items if it["unit"]["dst"] not in have]
+    return [it for it in items
+            if it["unit"]["dst"] not in have and it["unit"]["dst"] + EMPTY_MARKER not in have]
 
 
 def print_summary(items: list[dict], pending: list[dict]) -> None:
