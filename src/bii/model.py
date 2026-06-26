@@ -6,10 +6,9 @@ is reproduced verbatim; only the I/O boundary changed:
 
 * **Asset acquisition** goes through :func:`bii.tile_index.lookup` (footprint index / live LULC
   STAC) + ``worker.read`` instead of the original private STAC ``read_stac`` helper.
-* **``forestManagement``** reaches :func:`calc_bii` as an already-normalized managed-forest mask.
-  The provider-specific decode (FML codes ``>30 & <55`` vs an SDPT planted mask) lives in the
-  acquisition layer below — the seam the planned ``sources.py`` provider switch will own — so
-  :func:`calc_bii` itself stays provider-agnostic.
+* **``forestManagement``** is staged as raw FML categorical codes and decoded to a managed-forest
+  mask (``>30 & <55``) inside :func:`_static_predictors`. The planned ``sources.py`` provider switch
+  (FML vs an already-0/1 SDPT planted mask) will own this decode.
 * **BII is the product** ``abundance * community_similarity`` (notebook 2 / standard PREDICTS
   BII), not notebook 3's sum form.
 
@@ -61,6 +60,20 @@ INVERSE_TRANSFORMS = {
     "log": lambda x: np.exp(x),
 }
 
+
+def _transform_max(coefs: dict, transform: str) -> float:
+    """Per-cell maximum that normalizes a linear predictor to 0–1: the inverse link evaluated at
+    the predictors' max-impact inputs (ln_accessibility at 1440, ln_distRoads at 10 km)."""
+    return float(INVERSE_TRANSFORMS[transform](
+        coefs["Intercept"]
+        + coefs.get("ln_accessibility", 0) * np.log(1440)
+        + coefs.get("ln_distRoads", 0) * np.log(10000)
+    ))
+
+
+ABUNDANCE_MAX = _transform_max(ABUNDANCE_COEFFICIENTS, ABUNDANCE_TRANSFORM)
+COMMUNITY_SIMILARITY_MAX = _transform_max(COMMUNITY_SIMILARITY_COEFFICIENTS, COMMUNITY_SIMILARITY_TRANSFORM)
+
 # --------------------------------------------------------------------------------------
 # Asset groupings. forestLoss is single-epoch (a cumulative ``lossyear`` raster filtered per
 # year inside calc_bii), so it lives with the static assets — matching the notebook.
@@ -79,7 +92,7 @@ def nominal_scale(worker) -> float:
     return worker.scale
 
 
-def convolve(arr, radius, scale=1, dtype=np.float32):
+def convolve(arr, radius, scale=1):
     """Focal mean over a square window of side ``radius`` meters (``cv2.blur``).
 
     float32 (not float64) output: the focal predictors dominate the model's memory, and the BII
@@ -88,7 +101,7 @@ def convolve(arr, radius, scale=1, dtype=np.float32):
     if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
     kernel_size = round(radius / scale)
-    return cv2.blur(arr.astype(dtype), (kernel_size, kernel_size))[np.newaxis]
+    return cv2.blur(arr.astype(np.float32), (kernel_size, kernel_size))[np.newaxis]
 
 
 def fast_distance_transform(arr):
@@ -96,6 +109,17 @@ def fast_distance_transform(arr):
     if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
     return edt.edtsq(np.logical_not(arr))[np.newaxis]
+
+
+def expand_valid(arr, px):
+    """Grow a masked array's valid-data zone by ``px`` pixels, filling new cells with a neighboring
+    valid value (grayscale dilation)."""
+    if arr.ndim == 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    mask = np.ma.getmaskarray(arr)
+    data = np.ma.filled(arr, 0).astype(np.float32)
+    grown = cv2.dilate(data, np.ones((2 * px + 1, 2 * px + 1), np.uint8))
+    return np.where(mask, grown, data)[np.newaxis]
 
 
 # --------------------------------------------------------------------------------------
@@ -110,22 +134,8 @@ def _read(worker, asset: str, year: int | None = None):
     return worker.read(tile_index.lookup(asset, bounds, year))
 
 
-def _managed_forest_mask(arr):
-    """Decode the raw forestManagement raster into a 0/1 managed-forest mask.
-
-    FML v3.2 is staged as raw categorical management-class codes; managed forest is codes
-    ``>30 & <55`` (31 replanted, 32 woody plantation, 40 oil palm, 53 agroforestry). This is
-    the provider-specific decode the planned ``sources.py`` switch will own (an SDPT planted
-    mask is already 0/1 and would skip this); for now it defaults to the FML decode here so
-    :func:`calc_bii` always receives a normalized mask.
-    """
-    return np.ma.filled((arr > 30) & (arr < 55), False)
-
-
 def read_static_assets(worker) -> dict:
-    layers = {a: _read(worker, a) for a in STATIC_ASSETS}
-    layers["forestManagement"] = _managed_forest_mask(layers["forestManagement"])
-    return layers
+    return {a: _read(worker, a) for a in STATIC_ASSETS}
 
 
 def read_annual_assets(worker, year: int) -> dict:
@@ -135,94 +145,100 @@ def read_annual_assets(worker, year: int) -> dict:
 # --------------------------------------------------------------------------------------
 # BII computation
 # --------------------------------------------------------------------------------------
-def calc_bii(worker, layers: dict | None = None, year: int = config.START_YEAR, return_all: bool = False) -> dict:
-    """Compute abundance, community similarity, and BII for one chunk/year.
+def _static_predictors(layers: dict, scale: float) -> Iterator[tuple[str, object]]:
+    """Year-invariant predictors (derived from the roads/accessibility/forestManagement assets, plus
+    the Intercept). :func:`compute_all` folds these once per chunk and reuses the partial sums across
+    every year — the costly distance transform and dilations don't change year to year."""
+    distRoads = np.clip(np.sqrt(fast_distance_transform(layers["roads"])) * scale, 0, 10000)
+    # accessibility is ~1 km native: grow its valid zone 1 native px to cover the jagged nodata
+    accessibility = expand_valid(layers["accessibility"], max(1, round(1000 / scale)))
+    accessibility = np.clip(accessibility, 0, 1440)
+    # FML managed-forest classes (31 replanted, 32 woody plantation, 40 oil palm, 53 agroforestry)
+    fml = layers["forestManagement"]
+    forestManagement = np.ma.filled((fml > 30) & (fml < 55), False)
+    yield "ln_distRoads", np.log(distRoads + 1)
+    yield "ln_accessibility", np.log(accessibility + 1)
+    yield "forestManagement_100m", convolve(forestManagement, 200, scale)
+    yield "Intercept", 1
 
-    ``layers`` is a dict of read rasters keyed by asset name; ``forestManagement`` is expected
-    pre-normalized to a managed-forest mask (see :func:`read_static_assets`). If ``None``, the
-    assets are acquired for ``worker``'s bounds. BII is the product of abundance and community
-    similarity, masked to valid landcover.
-    """
-    if layers is None:
-        layers = read_static_assets(worker) | read_annual_assets(worker, year)
 
-    scale = nominal_scale(worker)
-
-    forestManagement = layers["forestManagement"]
-    forestLoss = (layers["forestLoss"].data <= year - 2000) & (layers["forestLoss"].data > 0)
-    distRoads = np.sqrt(fast_distance_transform(layers["roads"])) * scale
-    distRoads = np.clip(distRoads, 0, 10000)
-    ln_distRoads = np.log(distRoads + 1)
-    accessibility = np.clip(layers["accessibility"].data, 0, 1440).astype(np.float32)
-    ln_accessibility = np.log(accessibility + 1)
+def _annual_predictors(layers: dict, scale: float, year: int) -> Iterator[tuple[str, object]]:
+    """Predictors that vary by year: the landcover/population/nightlights focals and the
+    year-filtered forest loss."""
     ln_nightlights = np.log(layers["nightlights"] + 1).data
-    population = np.nan_to_num(np.ma.filled(layers["population"], 0), 0)
-    ln_population = np.log(population + 1)
+    ln_population = np.log(np.nan_to_num(np.ma.filled(layers["population"], 0), 0) + 1)
     crops = layers["landcover"].data == 5
     builtArea = layers["landcover"].data == 7
-    nodata = ~(layers["landcover"].data > 1)
+    forestLoss = (layers["forestLoss"].data <= year - 2000) & (layers["forestLoss"].data > 0)
+    yield "ln_nL2012_1000m", convolve(ln_nightlights, 2000, scale)
+    yield "ln_pD2006_1000m", convolve(ln_population, 2000, scale)
+    yield "lcCrops_1000m", convolve(crops, 2000, scale)
+    yield "lcCrops_100m", convolve(crops, 200, scale)
+    yield "lcBuiltArea_1000m", convolve(builtArea, 2000, scale)
+    yield "lcBuiltArea_100m", convolve(builtArea, 200, scale)
+    yield "forestLoss2006_100m", convolve(forestLoss, 200, scale)
 
-    predictors = {
-        "ln_distRoads": lambda: ln_distRoads,
-        "ln_accessibility": lambda: ln_accessibility,
-        "ln_nL2012_1000m": lambda: convolve(ln_nightlights, 2000, scale),
-        "ln_pD2006_1000m": lambda: convolve(ln_population, 2000, scale),
-        "forestManagement_100m": lambda: convolve(forestManagement, 200, scale),
-        "lcCrops_1000m": lambda: convolve(crops, 2000, scale),
-        "lcCrops_100m": lambda: convolve(crops, 200, scale),
-        "lcBuiltArea_1000m": lambda: convolve(builtArea, 2000, scale),
-        "lcBuiltArea_100m": lambda: convolve(builtArea, 200, scale),
-        "forestLoss2006_100m": lambda: convolve(forestLoss, 200, scale),
-        "Intercept": lambda: 1,
-    }
 
-    abundance_max = float(INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](
-        ABUNDANCE_COEFFICIENTS["Intercept"]
-        + ABUNDANCE_COEFFICIENTS.get("ln_accessibility", 0) * np.log(1440)
-        + ABUNDANCE_COEFFICIENTS.get("ln_distRoads", 0) * np.log(10000)
-    ))
-    community_similarity_max = float(INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](
-        COMMUNITY_SIMILARITY_COEFFICIENTS["Intercept"]
-        + COMMUNITY_SIMILARITY_COEFFICIENTS.get("ln_accessibility", 0) * np.log(1440)
-        + COMMUNITY_SIMILARITY_COEFFICIENTS.get("ln_distRoads", 0) * np.log(10000)
-    ))
-
-    abundance = community_similarity = 0.0
-    for name, predictor in predictors.items():
-        p = predictor()
+def _fold(predictors, abundance, community_similarity, computed=None):
+    """Accumulate ``coef * predictor`` into the abundance and community-similarity linear sums. A
+    generator-fed fold so each focal output streams one at a time and is freed before the next —
+    the peak holds one rather than all coexisting (the ceiling at the 8192 px chunk size)."""
+    for name, p in predictors:
         if name in ABUNDANCE_COEFFICIENTS:
             abundance = abundance + p * ABUNDANCE_COEFFICIENTS[name]
         if name in COMMUNITY_SIMILARITY_COEFFICIENTS:
             community_similarity = community_similarity + p * COMMUNITY_SIMILARITY_COEFFICIENTS[name]
+        if computed is not None:
+            computed[name] = p
         del p
+    return abundance, community_similarity
 
-    abundance = INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](abundance) / abundance_max
-    community_similarity = (
-        INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](community_similarity)
-        / community_similarity_max
-    )
 
+def _finalize(abundance, community_similarity, layers: dict, computed: dict | None = None) -> dict:
+    """Inverse-link and normalize the linear sums into abundance/community_similarity/bii, masked to
+    valid landcover. With ``computed``, also merges in the inputs and per-predictor arrays."""
+    abundance = INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](abundance) / ABUNDANCE_MAX
+    community_similarity = INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](community_similarity) / COMMUNITY_SIMILARITY_MAX
     bii = abundance * community_similarity
+
+    nodata = ~(layers["landcover"].data > 1)
     results = {
         "abundance": np.ma.MaskedArray(abundance, mask=nodata),
         "community_similarity": np.ma.MaskedArray(community_similarity, mask=nodata),
         "bii": np.ma.MaskedArray(bii, mask=nodata),
     }
+    return layers | computed | results if computed is not None else results
 
-    if return_all:
-        return layers | {k: f() for k, f in predictors.items()} | results
-    return results
+
+def calc_bii(worker, layers: dict | None = None, year: int = config.START_YEAR, return_all: bool = False) -> dict:
+    """Compute abundance, community similarity, and BII for one chunk/year.
+
+    ``layers`` is a dict of read rasters keyed by asset name. If ``None``, the assets are acquired
+    for ``worker``'s bounds. BII is the product of abundance and community similarity, masked to
+    valid landcover.
+    """
+    if layers is None:
+        layers = read_static_assets(worker) | read_annual_assets(worker, year)
+    scale = nominal_scale(worker)
+    computed = {} if return_all else None
+    ab, cs = _fold(_static_predictors(layers, scale), 0.0, 0.0, computed)
+    ab, cs = _fold(_annual_predictors(layers, scale, year), ab, cs, computed)
+    return _finalize(ab, cs, layers, computed)
 
 
 def compute_all(worker) -> Iterator[tuple[str, np.ndarray]]:
-    """Yield ``(<layer>_<year>, MaskedArray)`` for every configured year, reusing the static assets.
+    """Yield ``("bii_<year>", MaskedArray)`` for every configured year. The year-invariant predictors
+    (distance transform, accessibility dilation, forest-management focal) are folded once into the
+    static partial sums and reused across years, so only the annual predictors recompute per year.
 
-    A generator, not a dict: the entrypoint :mod:`bii.process` persists and releases each layer as
-    it arrives, so the peak holds one year's layers rather than all of them — the memory ceiling at
-    the larger chunk size.
+    A generator, not a dict: the entrypoint :mod:`bii.process` persists and releases each year's layer
+    as it arrives, so the peak holds one year rather than all of them — the memory ceiling at the
+    larger chunk size.
     """
     static_assets = read_static_assets(worker)
+    scale = nominal_scale(worker)
+    ab0, cs0 = _fold(_static_predictors(static_assets, scale), 0.0, 0.0)
     for year in config.years():
-        assets = static_assets | read_annual_assets(worker, year)
-        for k, v in calc_bii(worker, assets, year).items():
-            yield f"{k}_{year}", v
+        layers = static_assets | read_annual_assets(worker, year)
+        ab, cs = _fold(_annual_predictors(layers, scale, year), ab0, cs0)
+        yield f"bii_{year}", _finalize(ab, cs, layers)["bii"]
