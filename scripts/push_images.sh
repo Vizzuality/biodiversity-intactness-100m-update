@@ -18,7 +18,8 @@ IMAGE="$REGISTRY/bii:$TAG"
 cd "$(dirname "$0")/.."
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
 
-docker build -t "$IMAGE" .
+# --platform: Batch runs x86 (r6id/r5d/r5dn), so force amd64 even when building on an arm64 Mac.
+docker build --platform linux/amd64 -t "$IMAGE" .
 docker push "$IMAGE"
 
 echo "--- pin this in infra (tofu apply -var image=...) ---"

@@ -1,5 +1,5 @@
-# Managed EC2 Spot compute environment + queue + two job definitions. SPOT_CAPACITY_OPTIMIZED uses
-# the Spot service-linked role (no fleet role); the service-linked Batch role is implicit.
+# Managed EC2 Spot compute environment + queue + two job definitions. SPOT_PRICE_CAPACITY_OPTIMIZED
+# uses the Spot service-linked role (no fleet role); the service-linked Batch role is implicit.
 resource "aws_cloudwatch_log_group" "batch" {
   name              = "/aws/batch/${var.name}"
   retention_in_days = 30
@@ -11,7 +11,7 @@ resource "aws_batch_compute_environment" "this" {
 
   compute_resources {
     type                = "SPOT"
-    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
+    allocation_strategy = "SPOT_PRICE_CAPACITY_OPTIMIZED"
     max_vcpus           = var.max_vcpus
     min_vcpus           = 0
     instance_type       = var.instance_types

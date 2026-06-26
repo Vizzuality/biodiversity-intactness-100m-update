@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+import time
 
 from . import config, orchestration, s3io, tile_index
 from .staging import MODULES
@@ -78,7 +79,9 @@ def print_summary(items: list[dict], pending: list[dict]) -> None:
 
 
 def _manifest_uri() -> str:
-    return config.out_uri("stage", "manifest.jsonl")
+    # Unique per run: Batch workers read the manifest lazily at runtime, so a fixed name would let a
+    # later run's manifest clobber the lines an in-flight job still has to read.
+    return config.out_uri("stage", f"manifest_{time.strftime('%Y%m%dT%H%M%S')}.jsonl")
 
 
 # --------------------------------------------------------------------------------------

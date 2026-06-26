@@ -151,11 +151,21 @@ def submit_array(*, size: int, job_name: str, command: list[str] | None = None,
     return batch_client(client).submit_job(**kwargs)["jobId"]
 
 
+# Batch array child states, ordered submitted -> done, for a stable one-line progress summary.
+_ARRAY_STATES = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING", "SUCCEEDED", "FAILED")
+
+
 def wait_for_array(job_id: str, *, client=None) -> str:
-    """Poll Batch until ``job_id`` is SUCCEEDED or FAILED; return that state."""
+    """Poll Batch until ``job_id`` is SUCCEEDED or FAILED; return that state. Each poll prints the
+    array's per-state child counts to stderr so a long fan-out shows live progress."""
     client = batch_client(client)
     while True:
-        status = client.describe_jobs(jobs=[job_id])["jobs"][0].get("status", "")
+        job = client.describe_jobs(jobs=[job_id])["jobs"][0]
+        summary = job.get("arrayProperties", {}).get("statusSummary") or {}
+        if summary:
+            print("  " + "  ".join(f"{s}={summary[s]}" for s in _ARRAY_STATES if summary.get(s)),
+                  file=sys.stderr)
+        status = job.get("status", "")
         if status in ("SUCCEEDED", "FAILED"):
             return status
         time.sleep(_POLL_SECONDS)
