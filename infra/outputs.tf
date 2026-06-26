@@ -29,7 +29,7 @@ output "processing_bucket" {
   value       = aws_s3_bucket.processing.bucket
 }
 
-output "local_user" {
-  description = "Service account for local Docker; generate access keys manually"
-  value       = aws_iam_user.local.name
+output "local_role_arn" {
+  description = "Role to assume for running the pipeline locally (set as role_arn in an AWS profile)"
+  value       = aws_iam_role.local.arn
 }

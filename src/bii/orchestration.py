@@ -31,11 +31,6 @@ from . import s3io
 _POLL_SECONDS = 30.0
 # Env var naming the manifest URI inside a worker container; the array index selects the line.
 MANIFEST_ENV = "BII_MANIFEST"
-# Host env forwarded into docker containers (S3 creds; -e NAME passes the value).
-_FORWARD_ENV = (
-    "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN", "AWS_PROFILE",
-)
 
 
 # --------------------------------------------------------------------------------------
@@ -54,22 +49,44 @@ def read_manifest(uri: str) -> list[dict]:
 # --------------------------------------------------------------------------------------
 # Local docker executor
 # --------------------------------------------------------------------------------------
+def _aws_creds() -> dict:
+    """AWS_* env to hand a container: the active session's frozen credentials plus region. boto3
+    resolves whatever the host uses (an assume-role profile, SSO, env keys, instance profile), so a
+    profile that assumes a role yields temporary keys the container can use — unlike a bare
+    AWS_PROFILE, which is inert without ~/.aws or the source credentials inside the container."""
+    import boto3  # lazy: unit tests / docker-less paths don't need credentials
+
+    session = boto3.Session()
+    env = {}
+    if session.region_name:
+        env["AWS_REGION"] = env["AWS_DEFAULT_REGION"] = session.region_name
+    creds = session.get_credentials()
+    if creds:
+        f = creds.get_frozen_credentials()
+        env |= {"AWS_ACCESS_KEY_ID": f.access_key, "AWS_SECRET_ACCESS_KEY": f.secret_key}
+        if f.token:
+            env["AWS_SESSION_TOKEN"] = f.token
+    return env
+
+
 def docker_run(image: str, command: list[str], *, env: dict | None = None,
-               store: str | None = None) -> None:
-    """One ``docker run --rm`` mirroring a Batch job: forward the host creds in ``_FORWARD_ENV``
-    and set ``env`` (the job-definition environment). ``store`` is the local stand-in for the S3
-    store — bind-mounted at the same absolute path and pointed at by ``BII_STAGED_ROOT`` /
-    ``BII_OUT_ROOT``, so the container reads the manifest and writes its COGs to it."""
+               store: str | None = None, creds: dict | None = None) -> None:
+    """One ``docker run --rm`` mirroring a Batch job: forward the host's AWS credentials (``creds``,
+    defaulting to :func:`_aws_creds`) and set ``env`` (the job-definition environment). ``store`` is
+    the local stand-in for the S3 store — bind-mounted at the same absolute path and pointed at by
+    ``BII_STAGED_ROOT`` / ``BII_OUT_ROOT``, so the container reads the manifest and writes its COGs to it."""
     args = ["docker", "run", "--rm"]
     if store:
         args += ["-v", f"{store}:{store}"]
         env = {"BII_STAGED_ROOT": store, "BII_OUT_ROOT": store, **(env or {})}
-    args += [a for k in _FORWARD_ENV if k in os.environ for a in ("-e", k)]
+    creds = _aws_creds() if creds is None else creds
+    args += [a for k in creds for a in ("-e", k)]  # -e NAME (not NAME=value): keeps secrets off argv/ps
     args += [a for k, v in (env or {}).items() for a in ("-e", f"{k}={v}")]
     args += [image, *command]
     # Capture combined output so a failing unit's traceback survives in the run report; echo it
     # through once the unit finishes (the container output never streamed live anyway).
-    proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.run(args, env={**os.environ, **creds}, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True)
     sys.stdout.write(proc.stdout)
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, args, output=proc.stdout)
@@ -83,13 +100,14 @@ def run_docker(items: list[dict], command: list[str], *, manifest_uri: str, env:
     extra container environment (e.g. the processing run id). Continues past a container that exits
     non-zero; returns ``{"index", "error"}`` per failure."""
     image = image or os.environ.get("BII_STAGE_IMAGE", "bii")
+    creds = _aws_creds()  # resolve the host session once, not per container
     n = len(items)
     failed: list[dict] = []
     for i, it in enumerate(items):
         if label:
             print(f"[{i + 1}/{n}] {label(it)}", file=sys.stderr)
         try:
-            docker_run(image, command, store=store,
+            docker_run(image, command, store=store, creds=creds,
                        env={MANIFEST_ENV: manifest_uri, "AWS_BATCH_JOB_ARRAY_INDEX": i, **(env or {})})
         except subprocess.CalledProcessError as exc:
             tail = "\n".join((exc.output or "").strip().splitlines()[-15:]) or str(exc)

@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 
-from bii import s3io, stage
+from bii import stage
 from bii.staging import MODULES
 
 
@@ -28,9 +28,11 @@ def main(argv=None) -> dict:
     args = parser.parse_args(argv)
 
     if args.dry_run:
+        items = stage.manifest_items(args.dataset, args.year)
+        have = stage.staged_dsts(items)
         units = [{"dataset": it["dataset"], "id": it["unit"]["id"], "dst": it["unit"]["dst"],
-                  "exists": s3io.exists(it["unit"]["dst"])}
-                 for it in stage.manifest_items(args.dataset, args.year)]
+                  "exists": it["unit"]["dst"] in have}
+                 for it in items]
         result = {"planned": len(units), "exists": sum(u["exists"] for u in units), "units": units}
     else:
         result = stage.run(args.dataset, args.year, executor=args.executor, overwrite=args.overwrite)

@@ -33,6 +33,24 @@ tofu output    # batch_job_queue -> BII_BATCH_QUEUE, batch_job_def -> BII_BATCH_
 `tofu apply` with no `-var` leaves the job defs on `:latest` — fine for a first run, but pinning the
 digest is what guarantees local `docker` and Batch run the same image.
 
+## Running locally
+
+`tofu output local_role_arn` is a least-privilege role (read/write the two buckets + submit/monitor
+Batch jobs) that you assume from your own AWS identity — no long-lived access keys. By default any
+principal in the account that you grant `sts:AssumeRole` can assume it; pass
+`-var "local_principal_arn=arn:aws:iam::<acct>:user/<you>"` to pin it to one principal.
+
+Add a profile to `~/.aws/config` that assumes it from your normal credentials:
+
+```ini
+[profile bii-local]
+role_arn       = <local_role_arn>
+source_profile = default        # your existing creds/SSO profile
+region         = us-west-2
+```
+
+Then run the pipeline with `AWS_PROFILE=bii-local` — boto3 picks up the assumed role automatically.
+
 ## Notes
 
 - **Service-linked roles.** Batch uses `AWSServiceRoleForBatch` and Spot uses

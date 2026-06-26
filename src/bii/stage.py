@@ -57,9 +57,18 @@ def stage(item: dict | None = None) -> None:
     MODULES[item["dataset"]].stage_unit(item["unit"])
 
 
+def staged_dsts(items: list[dict]) -> set[str]:
+    """The ``dst`` URIs already staged, listing only the per-asset prefixes ``items`` span (every dst
+    is ``staged_uri(asset, ...)``) — one listing per asset rather than a HEAD per unit, and a
+    single-dataset run skips the rest of the tree. Shared by ``_pending`` and the dry-run summary."""
+    prefixes = {config.staged_uri(it["asset"]) + "/" for it in items}
+    return {uri for p in prefixes for uri in s3io.list_uris(p)}
+
+
 def _pending(items: list[dict]) -> list[dict]:
     """Items whose output ``dst`` does not yet exist (the skip-if-exists filter)."""
-    return [it for it in items if not s3io.exists(it["unit"]["dst"])]
+    have = staged_dsts(items)
+    return [it for it in items if it["unit"]["dst"] not in have]
 
 
 def print_summary(items: list[dict], pending: list[dict]) -> None:

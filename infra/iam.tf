@@ -57,13 +57,46 @@ resource "aws_iam_role_policy" "job_s3" {
   })
 }
 
-# Service account for running test_chunk --remote locally (e.g. in Docker).
-resource "aws_iam_user" "local" {
-  name = "${var.bucket}-local-s3"
+# Local role: assume from your own AWS identity to run the pipeline locally — same S3 access as the
+# job role, plus submitting + monitoring Batch jobs. Trusted by the account root by default (so any
+# IAM principal you grant sts:AssumeRole can use it), or pin a single principal via local_principal_arn.
+resource "aws_iam_role" "local" {
+  name = "${var.name}-local"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = coalesce(var.local_principal_arn, "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root") }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 }
 
-resource "aws_iam_user_policy" "local_s3" {
-  name = "s3"
-  user = aws_iam_user.local.name
+resource "aws_iam_role_policy" "local_s3" {
+  name   = "s3"
+  role   = aws_iam_role.local.id
   policy = aws_iam_role_policy.job_s3.policy
+}
+
+resource "aws_iam_role_policy" "local_batch" {
+  name = "batch"
+  role = aws_iam_role.local.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "batch:SubmitJob"
+        Resource = [
+          aws_batch_job_queue.this.arn,
+          "arn:aws:batch:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:job-definition/${var.name}-*",
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["batch:DescribeJobs", "batch:ListJobs"]
+        Resource = "*"
+      },
+    ]
+  })
 }

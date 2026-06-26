@@ -48,6 +48,12 @@ variable "job_memory" {
 # Image defaults to the Tofu-created ECR repo at :latest. Pin to a digest
 # (repo@sha256:...) here once scripts/push_images.sh has pushed, so Batch runs the exact image
 # you tested locally. null -> repo:latest (see locals in ecr.tf).
+variable "local_principal_arn" {
+  description = "IAM principal allowed to assume the local role (null = account root)."
+  type        = string
+  default     = null
+}
+
 variable "image" {
   description = "Merged image for staging + processing (null = <bii repo>:latest)."
   type        = string

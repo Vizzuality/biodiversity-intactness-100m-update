@@ -77,6 +77,7 @@ def test_submit_array_requires_queue_and_definition(monkeypatch):
 # --------------------------------------------------------------------------------------
 def test_run_docker_one_container_per_line(monkeypatch):
     monkeypatch.setenv("BII_STAGE_IMAGE", "img")
+    monkeypatch.setattr(orchestration, "_aws_creds", dict)
     calls = []
     monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
@@ -90,6 +91,7 @@ def test_run_docker_one_container_per_line(monkeypatch):
 
 
 def test_run_docker_continues_past_failure_and_reports_index(monkeypatch):
+    monkeypatch.setattr(orchestration, "_aws_creds", dict)
     monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: SimpleNamespace(returncode=2, stdout="boom"))
     failed = orchestration.run_docker(_items(2), ["bii-stage"], manifest_uri="m")
@@ -136,6 +138,7 @@ def test_run_batch_single_failed_job_is_index_zero(monkeypatch):
 # Dispatch + container entrypoint
 # --------------------------------------------------------------------------------------
 def test_run_manifest_writes_manifest_and_dispatches_to_docker(local_roots, monkeypatch):
+    monkeypatch.setattr(orchestration, "_aws_creds", dict)
     calls = []
     monkeypatch.setattr(orchestration.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
