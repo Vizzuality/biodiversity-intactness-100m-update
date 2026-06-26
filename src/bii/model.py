@@ -19,6 +19,8 @@ and the landcover nodata masking are all carried over unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import cv2
 import edt
 import numpy as np
@@ -212,18 +214,15 @@ def calc_bii(worker, layers: dict | None = None, year: int = config.START_YEAR, 
     return results
 
 
-def compute_all(worker) -> dict:
-    """Run :func:`calc_bii` for every configured year, reusing the static assets.
+def compute_all(worker) -> Iterator[tuple[str, np.ndarray]]:
+    """Yield ``(<layer>_<year>, MaskedArray)`` for every configured year, reusing the static assets.
 
-    Returns ``{<layer>_<year>: MaskedArray}`` for abundance, community_similarity, and bii —
-    the entrypoint :mod:`bii.process` persists as output COGs.
+    A generator, not a dict: the entrypoint :mod:`bii.process` persists and releases each layer as
+    it arrives, so the peak holds one year's layers rather than all of them — the memory ceiling at
+    the larger chunk size.
     """
     static_assets = read_static_assets(worker)
-
-    all_results = {}
     for year in config.years():
         assets = static_assets | read_annual_assets(worker, year)
         for k, v in calc_bii(worker, assets, year).items():
-            all_results[f"{k}_{year}"] = v
-
-    return all_results
+            yield f"{k}_{year}", v

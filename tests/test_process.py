@@ -50,10 +50,10 @@ def _manager():
 
 def _stub_compute_all(worker):
     shape = (1, worker.height, worker.width)
-    return {
-        key: np.ma.MaskedArray(np.ones(shape, np.float32), mask=np.zeros(shape, bool))
+    return [
+        (key, np.ma.MaskedArray(np.ones(shape, np.float32), mask=np.zeros(shape, bool)))
         for key in process.output_layers()
-    }
+    ]
 
 
 def _write_outputs(chunks, run_id):

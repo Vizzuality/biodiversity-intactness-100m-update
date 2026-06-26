@@ -89,9 +89,8 @@ def process(chunk: dict | None = None, run_id: str | None = None) -> None:
     run_id = run_id or config.RUN_ID
     worker = Worker(**chunk)
     with rio.Env(**READ_ENV):
-        layers = model.compute_all(worker)
-    for key, arr in layers.items():
-        persist_cog(worker, arr, output_uri(run_id, key, worker))
+        for key, arr in model.compute_all(worker):
+            persist_cog(worker, arr, output_uri(run_id, key, worker))
 
 
 # --------------------------------------------------------------------------------------
@@ -119,7 +118,7 @@ def _coverage(assets: tuple[str, ...], year: int) -> gpd.GeoDataFrame | None:
 
 def chunk_manifest(
     manager: Manager,
-    chunksize: int = 4096,
+    chunksize: int = 8192,
     *,
     coverage_assets: tuple[str, ...] = COVERAGE_ASSETS,
     coverage_year: int | None = None,
@@ -156,7 +155,7 @@ def run(
     manager: Manager,
     *,
     run_id: str | None = None,
-    chunksize: int = 4096,
+    chunksize: int = 8192,
     coverage_assets: tuple[str, ...] = COVERAGE_ASSETS,
     coverage_year: int | None = None,
     executor: str = "batch",
