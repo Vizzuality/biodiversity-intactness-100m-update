@@ -5,13 +5,11 @@ Batch queue/job-def come from the environment (``BII_BATCH_QUEUE`` / ``BII_BATCH
 
     python scripts/run.py --bounds -86 9 -84 11                       # fan out + retry on Batch
     python scripts/run.py --bounds -86 9 -84 11 --no-submit           # write manifest only (size gate)
-    python scripts/run.py --bounds -86 9 -84 11 --executor docker --staged ./data/staged_local
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 
 from bii import config, process
@@ -25,18 +23,12 @@ def main(argv=None) -> dict:
                         default=[-180.0, -85.0, 180.0, 85.0], help="analysis extent in EPSG:4326")
     parser.add_argument("--executor", choices=("docker", "batch"), default="batch",
                         help="where to run chunks (default: batch on AWS)")
-    parser.add_argument("--staged", default=None,
-                        help="local staged/output root for --executor docker (bind-mounted into the container)")
     parser.add_argument("--overwrite", action="store_true", help="reprocess chunks whose outputs already exist")
     parser.add_argument("--no-submit", action="store_true", help="write the manifest only; don't run it")
     args = parser.parse_args(argv)
 
-    store = os.path.abspath(args.staged) if args.staged else None
-    if store:  # set host-side so chunk_manifest reads the local coverage index
-        config.STAGED_ROOT = config.OUT_ROOT = store
-
     manager = Manager(bounds=tuple(args.bounds), scale=config.SCALE_DEG, proj=config.PROJ, buffer=config.BUFFER)
-    result = process.run(manager, run_id=args.run_id, executor=args.executor, store=store,
+    result = process.run(manager, run_id=args.run_id, executor=args.executor, store=None,
                          overwrite=args.overwrite, submit=not args.no_submit)
     print(json.dumps(result))
     return result

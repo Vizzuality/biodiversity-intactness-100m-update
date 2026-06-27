@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Single-chunk local docker test
 
-Runs ``bii-process`` on one chunk in the production image. ``--remote`` reads inputs from S3 but still writes outputs to ``--staged``, so it
+Runs ``bii-process`` on one chunk in the production image. ``--remote`` reads inputs from S3 but still writes outputs to ``--out``, so it
 needs only read S3 creds.
 
     python scripts/test_chunk.py                          # central Spain, 2020, ./data/staged_local
@@ -27,15 +27,15 @@ def main(argv=None) -> dict:
                    default=[-5.0, 39.0, -1.32, 42.68],
                    help="analysis extent in EPSG:4326 (default: ~4096px central Spain)")
     p.add_argument("--year", type=int, default=2020, help="year to process")
-    p.add_argument("--staged", default="./data/staged_local",
-                   help="local staged root (bind-mounted into the container)")
+    p.add_argument("--out", default="./data/staged_local",
+                   help="local output dir / out-root (bind-mounted into the container)")
     p.add_argument("--remote", action="store_true",
-                   help="read staged inputs from the S3 store instead of the local --staged dir")
+                   help="read staged inputs from the S3 store instead of the local --out dir")
     args = p.parse_args(argv)
 
     config.START_YEAR = config.END_YEAR = args.year
     run_id = config.RUN_ID
-    store = os.path.abspath(args.staged)
+    store = os.path.abspath(args.out)
     config.OUT_ROOT = store
     if not args.remote:
         config.STAGED_ROOT = store

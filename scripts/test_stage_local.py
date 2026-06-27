@@ -3,7 +3,7 @@
 
 worldpop/sdpt filter by a vendored country bbox table (``scripts/data/country_bounds.json``).
 
-    python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --staged ./data/staged_local
+    python scripts/test_stage_local.py --bounds -86 9 -84 11 --year 2020 --out ./data/staged_local
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _roads_ids(aoi) -> set:
     return set(gdf[gdf.intersects(box(*aoi))]["id"])
 
 
-def _aoi_items(datasets, year, aoi, cbounds, countries, regions) -> list[dict]:
+def _aoi_items(datasets, year, aoi, cbounds) -> list[dict]:
     """worldpop/sdpt units are generated for the AOI's countries (not filtered from the module's
     partial default list) so any country the source covers is reachable."""
     aoi_isos = {c for c, b in cbounds.items() if _intersects(b, aoi)}
@@ -53,9 +53,9 @@ def _aoi_items(datasets, year, aoi, cbounds, countries, regions) -> list[dict]:
             road_ids = _roads_ids(aoi)
             units = [u for u in mod.list_units() if u["id"] in road_ids]
         elif name == "worldpop":
-            units = mod.list_units(countries=sorted(countries or aoi_isos), years=[year])
+            units = mod.list_units(countries=sorted(aoi_isos), years=[year])
         elif name == "sdpt":  # Europe folds into "eu"
-            regs = {r.lower() for r in regions} if regions else sdpt.regions_for(aoi_isos)
+            regs = sdpt.regions_for(aoi_isos)
             units = mod.list_units(regions=sorted(regs)) if regs else []
         elif name in ("nightlights", "iolulc"):
             units = mod.list_units(years=[year])
@@ -71,15 +71,13 @@ def main(argv=None) -> dict:
                    default=[-5.0, 39.0, -1.32, 42.68],
                    help="AOI extent in EPSG:4326 (default: ~4096px central Spain)")
     p.add_argument("--year", type=int, default=2020, help="year to stage (per-year datasets)")
-    p.add_argument("--staged", default="./data/staged_local", help="local staged root (bind-mounted into the container)")
-    p.add_argument("--countries", nargs="*", help="ISO3 override for worldpop (default: from bbox table)")
-    p.add_argument("--regions", nargs="*", help="region override for sdpt (default: from bbox table)")
+    p.add_argument("--out", default="./data/staged_local", help="local staged-root output dir (bind-mounted into the container)")
     p.add_argument("--dataset", choices=sorted(stage.MODULES), help="stage only this dataset (default: all)")
     p.add_argument("--overwrite", action="store_true", help="restage units whose output already exists")
     p.add_argument("--dry-run", action="store_true", help="list the AOI-selected units and exit")
     args = p.parse_args(argv)
 
-    staged = os.path.abspath(args.staged)
+    staged = os.path.abspath(args.out)
     config.STAGED_ROOT = config.OUT_ROOT = staged
     config.START_YEAR = config.END_YEAR = args.year
 
@@ -89,11 +87,9 @@ def main(argv=None) -> dict:
     aoi = (w - pad, s - pad, e + pad, n + pad)
 
     cbounds = json.load(open(COUNTRY_BOUNDS))
-    countries = {c.upper() for c in args.countries} if args.countries else None
-    regions = {r.upper() for r in args.regions} if args.regions else None
     datasets = [args.dataset] if args.dataset else list(stage.MODULES)
 
-    items = _aoi_items(datasets, args.year, aoi, cbounds, countries, regions)
+    items = _aoi_items(datasets, args.year, aoi, cbounds)
 
     if args.dry_run:
         pending = items if args.overwrite else stage._pending(items)
