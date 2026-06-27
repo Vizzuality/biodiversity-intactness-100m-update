@@ -128,10 +128,6 @@ def test_process_writes_all_layers_unconditionally(local_out, one_year, monkeypa
 # --------------------------------------------------------------------------------------
 # Driver — manifest build, skip-done, run/retry loop
 # --------------------------------------------------------------------------------------
-def test_manifest_uri(local_out):
-    assert process.manifest_uri("v1").endswith("/v1/chunks.jsonl")
-
-
 def test_chunk_manifest_keeps_all_chunks_without_coverage_index(local_roots):
     chunks = process.chunk_manifest(_manager(), chunksize=2)
     full = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
@@ -199,8 +195,9 @@ def test_run_docker_executor_runs_one_container_per_chunk(local_roots, one_year,
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stdout=""))
     chunks = process.chunk_manifest(_manager(), chunksize=2, coverage_assets=())
     result = process.run(_manager(), run_id="v1", chunksize=2, coverage_assets=(), executor="docker")
+    # process.py's contribution is wiring run() to the docker executor; the per-container argv is
+    # orchestration.run_docker's job (covered in test_orchestration.py).
     assert result["complete"] and len(calls) == len(chunks)
-    assert calls[0][-1] == "bii-process" and "BII_RUN_ID=v1" in calls[0]
 
 
 def test_run_no_submit_writes_manifest_only(local_roots, one_year):

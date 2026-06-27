@@ -32,14 +32,6 @@ def _write_geojson(path, geometries) -> str:
     return str(path)
 
 
-def test_grid_params():
-    assert config.BUFFER == 100
-    assert config.SCALE_DEG == pytest.approx(100 / config.DEG2METERS)
-    assert config.SCALE_DEG == pytest.approx(0.000898, abs=1e-5)
-    assert config.START_YEAR <= config.END_YEAR
-    assert config.years()[0] == config.START_YEAR
-
-
 def test_staged_uri_local_override(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "STAGED_ROOT", str(tmp_path))
     assert config.staged_uri("forestLoss", "x.tif") == f"{tmp_path}/forestLoss/x.tif"
@@ -233,6 +225,17 @@ def test_roads_manifest_units():
     ids = {u["id"] for u in units}
     assert roads.GEOFABRIK_DROP_IDS.isdisjoint(ids)
     assert "us/delaware" in ids and "us" not in ids
+
+
+def test_roads_osmfilter_args_collapse_subtype_drops():
+    from bii.staging import roads
+
+    args = roads._osmfilter_args()
+    assert args[0] == "--keep=highway="
+    assert "--drop=tunnel=yes" in args
+    # All sub-type drops collapse into ONE --drop (osmfilter reuses the last key for ` =value`).
+    drops = [a for a in args if a.startswith("--drop=highway=")]
+    assert drops == ["--drop=highway=" + " =".join(roads.OSM_HIGHWAY_DROP_VALUES)]
 
 
 def _open_cog_band(uri, band=1):

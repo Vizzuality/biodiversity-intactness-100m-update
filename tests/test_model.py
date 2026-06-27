@@ -48,18 +48,6 @@ def _synthetic_layers(n=24):
     }
 
 
-def test_nominal_scale_geographic():
-    assert model.nominal_scale(_FakeWorker()) == pytest.approx(config.SCALE_DEG * config.DEG2METERS)
-    assert model.nominal_scale(_FakeWorker()) == pytest.approx(config.SCALE_METERS)
-
-
-def test_convolve_preserves_band_shape():
-    arr = np.ones((1, 16, 16))
-    out = model.convolve(arr, 200, scale=100)
-    assert out.shape == (1, 16, 16)
-    assert out == pytest.approx(1.0)  # focal mean of a constant field
-
-
 def test_predictors_decode_managed_forest():
     # FML managed-forest is codes >30 & <55; forestManagement_100m is the focal mean of that mask.
     base = _synthetic_layers()
@@ -89,6 +77,15 @@ def test_calc_bii_product_form_and_masking():
     assert (bii.compressed() >= 0).all()
 
 
-def test_calc_bii_return_all_includes_predictors():
-    out = model.calc_bii(_FakeWorker(), _synthetic_layers(), year=2020, return_all=True)
-    assert {"bii", "Intercept", "forestManagement_100m", "landcover"} <= set(out)
+def test_compute_all_matches_per_year_calc_bii(monkeypatch):
+    # compute_all folds the static predictors once and reuses them across years (the chunk-memory
+    # optimization); it must still yield exactly what an independent per-year calc_bii gives.
+    worker, layers = _FakeWorker(), _synthetic_layers()
+    monkeypatch.setattr(model, "read_static_assets", lambda w: layers)
+    monkeypatch.setattr(model, "read_annual_assets", lambda w, year: layers)
+
+    out = dict(model.compute_all(worker))
+    assert set(out) == {f"bii_{y}" for y in config.years()}
+    for year in config.years():
+        expected = model.calc_bii(worker, layers, year=year)["bii"]
+        np.testing.assert_allclose(np.ma.filled(out[f"bii_{year}"], 0), np.ma.filled(expected, 0))

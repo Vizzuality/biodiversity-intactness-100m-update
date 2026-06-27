@@ -82,10 +82,6 @@ def test_stage_iolulc_index(data_staged):
     reason="osmctools not installed (required for roads staging)",
 )
 def test_stage_roads_region(data_staged):
-    _check_roads_region()
-
-
-def _check_roads_region():
     # Christmas Island — a tiny Geofabrik extract.
     unit = next(u for u in roads.list_units(regions=["christmas-island"]))
     assert roads.stage_unit(unit) is True
