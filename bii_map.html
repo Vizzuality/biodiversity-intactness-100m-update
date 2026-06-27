@@ -1,0 +1,144 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>BII COG explorer</title>
+<link href="https://esm.sh/maplibre-gl@5/dist/maplibre-gl.css" rel="stylesheet" />
+<style>
+  html, body, #map { margin: 0; height: 100%; }
+  #panel {
+    position: absolute; top: 10px; left: 10px; z-index: 1; padding: 10px;
+    background: rgba(20,20,20,.85); color: #eee; font: 13px sans-serif; border-radius: 6px;
+  }
+  #panel select { margin-left: 6px; }
+  #panel label { display: block; margin: 4px 0; }
+</style>
+<div id="map"></div>
+<div id="panel">
+  <strong>BII v1.1</strong>
+  <label>Year <select id="year"></select></label>
+  <label>Colormap <select id="cmap"></select></label>
+</div>
+<script type="module">
+import maplibregl from "https://esm.sh/maplibre-gl@5";
+
+const DEPS = "deps=@deck.gl/core@9.3.2,@deck.gl/layers@9.3.2,@deck.gl/geo-layers@9.3.2,@deck.gl/mesh-layers@9.3.2,@luma.gl/core@9.3.2,@luma.gl/engine@9.3.2,@luma.gl/shadertools@9.3.2";
+const { MapboxOverlay } = await import(`https://esm.sh/@deck.gl/mapbox@9.3.2?${DEPS}`);
+const { MosaicLayer, COGLayer } = await import(`https://esm.sh/@developmentseed/deck.gl-geotiff@0.8.0-beta.2?${DEPS}`);
+const { CreateTexture, Colormap, MaskTexture, createColormapTexture, decodeColormapSprite, COLORMAP_INDEX } =
+  await import(`https://esm.sh/@developmentseed/deck.gl-raster@0.8.0-beta.2/gpu-modules?${DEPS}`);
+const { GeoTIFF, DecoderPool } = await import("https://esm.sh/@developmentseed/geotiff@0.8.0-beta.2");
+
+// No createWorker -> decode on the main thread (cross-origin workers are blocked).
+const pool = new DecoderPool();
+
+const BUCKET = "https://vizz-bii.s3.amazonaws.com/out/v1_1";
+const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024];
+const COLORMAP_PNG = "https://cdn.jsdelivr.net/npm/@developmentseed/deck.gl-raster@0.8.0-beta.2/dist/gpu-modules/colormaps.png";
+
+let year = 2020;
+let cmap = COLORMAP_INDEX.rdylgn;
+
+// quadkey -> [minLon, minLat, maxLon, maxLat]
+function quadkeyBbox(qk) {
+  let x = 0, y = 0;
+  const z = qk.length;
+  for (let i = 0; i < z; i++) {
+    const m = 1 << (z - i - 1), d = qk[i];
+    if (d === "1") x |= m;
+    else if (d === "2") y |= m;
+    else if (d === "3") { x |= m; y |= m; }
+  }
+  const n = 2 ** z, lat = t => Math.atan(Math.sinh(Math.PI * (1 - 2 * t))) * 180 / Math.PI;
+  return [x / n * 360 - 180, lat((y + 1) / n), (x + 1) / n * 360 - 180, lat(y / n)];
+}
+
+async function loadSources(yr) {
+  const mj = await (await fetch(`${BUCKET}/bii_${yr}/bii_${yr}_mosaic.json`)).json();
+  const bb = new Map();
+  for (const [qk, cogs] of Object.entries(mj.tiles)) {
+    const b = quadkeyBbox(qk);
+    for (const c of cogs) {
+      const url = c.replace("s3://vizz-bii/", "https://vizz-bii.s3.amazonaws.com/");
+      const e = bb.get(url);
+      if (e) { e[0] = Math.min(e[0], b[0]); e[1] = Math.min(e[1], b[1]); e[2] = Math.max(e[2], b[2]); e[3] = Math.max(e[3], b[3]); }
+      else bb.set(url, [...b]);
+    }
+  }
+  return [...bb].map(([url, bbox]) => ({ id: url, url, bbox }));
+}
+
+const tiffs = new Map();
+function getTiff(url, opts) {
+  let p = tiffs.get(url);
+  if (!p) { p = GeoTIFF.fromUrl(url, opts).catch(e => { tiffs.delete(url); throw e; }); tiffs.set(url, p); }
+  return p;
+}
+
+let colormapTexture;
+let colormapImage = fetch(COLORMAP_PNG).then(r => r.arrayBuffer()).then(decodeColormapSprite);
+
+async function getTileData(image, { device, x, y, signal, pool }) {
+  const { array } = await image.fetchTile(x, y, { boundless: false, signal, pool });
+  const { width, height, data, mask } = array;
+  const sampler = { minFilter: "nearest", magFilter: "nearest" };
+  const texture = device.createTexture({ data, format: "r32float", width, height, sampler });
+  const maskTexture = mask && device.createTexture({ data: mask, format: "r8unorm", width, height, sampler });
+  if (!colormapTexture) colormapTexture = createColormapTexture(device, await colormapImage);
+  return { texture, mask: maskTexture, width, height };
+}
+
+function renderTile(d) {
+  const renderPipeline = [
+    { module: CreateTexture, props: { textureName: d.texture } },
+    { module: Colormap, props: { colormapTexture, colormapIndex: cmap } },
+  ];
+  if (d.mask) renderPipeline.push({ module: MaskTexture, props: { maskTexture: d.mask } });
+  return { renderPipeline };
+}
+
+function buildLayer(sources) {
+  return new MosaicLayer({
+    id: `bii-${year}-${cmap}`,
+    sources,
+    minZoom: 3,
+    maxRequests: 12,
+    maxCacheSize: 0,
+    getSource: (s, o) => getTiff(s.url, { signal: o.signal, concurrencyLimiter: o.concurrencyLimiter }),
+    renderSource: (s, { data, signal }) =>
+      new COGLayer({
+        id: `cog-${s.url}`,
+        geotiff: data,
+        pool,
+        getTileData,
+        renderTile,
+        signal,
+        onTileUnload: t => { t.content?.texture?.destroy(); t.content?.mask?.destroy(); },
+      }),
+  });
+}
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  center: [0, 20],
+  zoom: 4,
+});
+const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
+map.addControl(overlay);
+
+let sourcesByYear = new Map();
+async function refresh() {
+  if (!sourcesByYear.has(year)) sourcesByYear.set(year, await loadSources(year));
+  overlay.setProps({ layers: [buildLayer(sourcesByYear.get(year))] });
+}
+
+const yearSel = document.getElementById("year");
+for (const y of YEARS) yearSel.add(new Option(y, y, y === year, y === year));
+yearSel.onchange = e => { year = +e.target.value; refresh(); };
+
+const cmapSel = document.getElementById("cmap");
+for (const name of ["rdylgn", "viridis", "greens", "ylgn", "spectral", "turbo"])
+  cmapSel.add(new Option(name, COLORMAP_INDEX[name], name === "rdylgn", name === "rdylgn"));
+cmapSel.onchange = e => { cmap = +e.target.value; refresh(); };
+
+map.on("load", refresh);
+</script>

@@ -35,6 +35,18 @@ resource "aws_s3_bucket_policy" "outputs_public" {
   })
 }
 
+# Allow browsers (e.g. the COG map viewer) to range-read published objects.
+resource "aws_s3_bucket_cors_configuration" "outputs" {
+  bucket = aws_s3_bucket.outputs.id
+  cors_rule {
+    allowed_methods = ["GET", "HEAD"]
+    allowed_origins = ["*"]
+    allowed_headers = ["*"]
+    expose_headers  = ["Content-Range", "Content-Length", "Accept-Ranges"]
+    max_age_seconds = 3600
+  }
+}
+
 resource "aws_s3_bucket_versioning" "outputs" {
   bucket = aws_s3_bucket.outputs.id
   versioning_configuration {
