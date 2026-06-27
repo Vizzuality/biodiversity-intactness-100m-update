@@ -25,7 +25,7 @@ population, nightlights, roads, and accessibility.
 uv sync --extra process --extra dev          # install
 ```
 
-Bring up infra and push the image: see `infra/README.md` and `scripts/push_images.sh`. The CLIs
+Bring up infra and deploy the image: see `infra/README.md` and `scripts/deploy.sh`. The CLIs
 read AWS credentials and `BII_BATCH_*` pointers from a gitignored `.env` (populated from
 `tofu output`).
 

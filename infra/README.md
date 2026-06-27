@@ -12,11 +12,7 @@ tofu init
 tofu apply                      # creates VPC, bucket, ECR repo, Batch (job defs -> repo:latest)
 
 cd ..
-./scripts/push_images.sh        # build + push the bii image; prints the digest
-
-cd infra
-tofu apply \                    # re-point job defs at the exact pushed digest
-  -var "image=<bii digest>"
+./scripts/deploy.sh             # build + push the bii image, then pin its digest into the job defs
 ```
 
 Then wire the outputs into `.env`:
@@ -28,6 +24,10 @@ tofu output    # batch_job_queue -> BII_BATCH_QUEUE, batch_job_def -> BII_BATCH_
 
 `tofu apply` with no `-var` leaves the job defs on `:latest` — fine for a first run, but pinning the
 digest is what guarantees local `docker` and Batch run the same image.
+
+## Redeploy
+
+`./scripts/deploy.sh` — builds + pushes the current HEAD image and pins its digest into the job defs.
 
 ## Running locally
 
