@@ -55,10 +55,7 @@ def stage(item: dict | None = None) -> None:
 def index(item: dict | None = None) -> None:
     """``bii-index`` entrypoint: Rebuild one asset's footprint index from its staged COGs."""
     item = item or orchestration.manifest_line()
-    try:
-        tile_index.index_cogs(item["asset"], item["year"])
-    except FileNotFoundError:
-        pass
+    tile_index.index_cogs(item["asset"], item["year"])
 
 
 def staged_dsts(items: list[dict]) -> set[str]:

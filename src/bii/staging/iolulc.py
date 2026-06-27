@@ -44,12 +44,7 @@ def _item_footprints(year: int) -> list[tuple[str, object]]:
     return footprints
 
 
-def stage_unit(unit: dict | None = None, year: int | None = None) -> dict | None:
+def stage_unit(unit: dict) -> bool:
     """Build (overwriting) the landcover footprint index for one year."""
-    year = (unit or {}).get("year", year) if unit else year
-    if year is None:
-        raise ValueError("iolulc.stage_unit requires a year (via unit['year'] or year=)")
-
-    footprints = _item_footprints(year)
-    uri = tile_index.build_index(ASSET, footprints, year=year)
-    return {"asset": ASSET, "uri": uri, "year": year, "n_items": len(footprints)}
+    tile_index.build_index(ASSET, _item_footprints(unit["year"]), year=unit["year"])
+    return True

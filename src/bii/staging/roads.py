@@ -90,10 +90,6 @@ def _require_osmctools() -> None:
         )
 
 
-def _run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
 def _osmfilter_args() -> list[str]:
     key = OSM_HIGHWAY_KEY
     args = [f"--keep={key}="]
@@ -116,9 +112,9 @@ def _filter_highways(source: str, tmpdir: str) -> str:
     o5m = os.path.join(tmpdir, "in.o5m")
     roads_o5m = os.path.join(tmpdir, "roads.o5m")
     pbf = os.path.join(tmpdir, "roads.osm.pbf")
-    _run(["osmconvert", source, "--drop-relations", "--out-o5m", f"-o={o5m}"])
-    _run(["osmfilter", o5m, *_osmfilter_args(), "--out-o5m", f"-o={roads_o5m}"])
-    _run(["osmconvert", roads_o5m, "--out-pbf", f"-o={pbf}"])
+    subprocess.run(["osmconvert", source, "--drop-relations", "--out-o5m", f"-o={o5m}"], check=True)
+    subprocess.run(["osmfilter", o5m, *_osmfilter_args(), "--out-o5m", f"-o={roads_o5m}"], check=True)
+    subprocess.run(["osmconvert", roads_o5m, "--out-pbf", f"-o={pbf}"], check=True)
     return pbf
 
 

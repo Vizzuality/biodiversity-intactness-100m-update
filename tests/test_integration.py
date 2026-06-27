@@ -66,12 +66,7 @@ def test_stage_sdpt_country(data_staged):
 def test_stage_iolulc_index(data_staged):
     # Index-only: no COG produced; index rows point at the original STAC hrefs, read in place.
     unit = {"id": "2020", "year": 2020}
-    result = iolulc.stage_unit(unit)
-
-    assert result is not None
-    assert result["asset"] == "landcover"
-    assert result["year"] == 2020
-    assert result["n_items"] > 0
+    assert iolulc.stage_unit(unit) is True
 
     # Costa Rica test bounds.
     hits = tile_index.lookup("landcover", (-86, 9, -84, 11), year=2020)
@@ -79,9 +74,7 @@ def test_stage_iolulc_index(data_staged):
     assert all(isinstance(h, str) for h in hits)
 
     # Always rebuilds; existence checks are the orchestrator's job.
-    again = iolulc.stage_unit(unit)
-    assert again is not None and again["n_items"] == result["n_items"]
-    assert "skipped" not in again
+    assert iolulc.stage_unit(unit) is True
 
 
 @pytest.mark.skipif(

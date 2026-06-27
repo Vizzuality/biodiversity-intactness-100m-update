@@ -54,9 +54,13 @@ def build_index(asset: str, footprints, year: int | None = None) -> str:
 
 def _asset_cogs(asset: str, year: int | None) -> list[str]:
     """Staged COG URIs for ``asset`` filtered to ``year`` — annual assets embed the year in the
-    COG path; single-epoch assets (``year=None``) take all."""
-    uris = io.list_uris(config.staged_uri(asset) + "/")
-    return [u for u in uris if u.endswith(".tif") and (year is None or str(year) in u)]
+    COG path; single-epoch assets (``year=None``) take all. Matches ``year`` only within the path
+    below the asset prefix so a year-like number in the staged root doesn't match every tile."""
+    prefix = config.staged_uri(asset) + "/"
+    uris = [u for u in io.list_uris(prefix) if u.endswith(".tif")]
+    if year is None:
+        return uris
+    return [u for u in uris if str(year) in u[len(prefix):]]
 
 
 def index_cogs(asset: str, year: int | None = None) -> str:
@@ -70,20 +74,18 @@ def index_cogs(asset: str, year: int | None = None) -> str:
         return build_index(asset, zip(uris, footprints), year=year)
 
 
-def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | None = None) -> list[str]:
-    """Return source URIs whose footprints intersect ``bounds`` (EPSG:4326)."""
-    uri = index_uri(asset, year)
-    if not io.exists(uri):
-        return []
-    gdf = gpd.read_parquet(uri)
-    query = box(*bounds)
-    idx = list(gdf.sindex.query(query, predicate="intersects"))
-    return gdf.iloc[idx]["uri"].tolist()
-
-
 def read_index(asset: str, year: int | None = None) -> gpd.GeoDataFrame | None:
     """``asset``'s footprint index as a GeoDataFrame, or ``None`` if absent."""
     uri = index_uri(asset, year)
     if not io.exists(uri):
         return None
     return gpd.read_parquet(uri)
+
+
+def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | None = None) -> list[str]:
+    """Return source URIs whose footprints intersect ``bounds`` (EPSG:4326)."""
+    gdf = read_index(asset, year)
+    if gdf is None:
+        return []
+    idx = list(gdf.sindex.query(box(*bounds), predicate="intersects"))
+    return gdf.iloc[idx]["uri"].tolist()
