@@ -1,21 +1,8 @@
-"""Shared executors: run a JSONL manifest as one container per line, locally or on AWS Batch.
+"""Job orechestration in local docker or AWS Batch array job
 
-The staging and processing fan-outs both reduce to the same contract — a manifest where array index
-N is line N, dispatched to a worker command — so the executors live here and the two drivers
-(:mod:`bii.stage`, :mod:`bii.process`) stay dataset/metric specific. Two executors run the same
-per-line work over the same manifest, so a local docker run exercises exactly what Batch will:
-
-* ``run_docker`` — one ``docker run`` per line (test the image locally).
-* ``run_batch``  — submit the manifest as an AWS Batch array job.
-
-:func:`run_manifest` is the one entry both drivers call: write the manifest, dispatch it to the
-chosen executor, return the failed lines. :func:`manifest_line` is the other side — a worker
-container reads line ``AWS_BATCH_JOB_ARRAY_INDEX`` of the manifest at ``BII_MANIFEST``.
-
-Batch infra is deployment-specific: queue/definition come from ``BII_BATCH_QUEUE`` /
-``BII_BATCH_JOB_DEF`` (or explicit args). The boto3 Batch client and the wait step are injectable
-for testing. Both executors report failures as ``{"index", "error"}`` so the driver can map a failed
-line back to its source item.
+Write/read a JSONL manifest of jobs, one container per line.
+Local docker run provides parity with the Batch execution environment for testing.
+Failures as ``{"index", "error"}``.
 """
 
 from __future__ import annotations
@@ -29,15 +16,10 @@ import time
 from . import io
 
 _POLL_SECONDS = 30.0
-# Env var naming the manifest URI inside a worker container; the array index selects the line.
 MANIFEST_ENV = "BII_MANIFEST"
 
 
-# --------------------------------------------------------------------------------------
-# Manifest JSONL I/O (reuses io's S3/local byte helpers)
-# --------------------------------------------------------------------------------------
 def write_manifest(items: list[dict], uri: str) -> str:
-    """Write ``items`` as JSONL (one dict per line) to ``uri`` (S3 or local)."""
     io.put_bytes("".join(json.dumps(it) + "\n" for it in items).encode(), uri)
     return uri
 
@@ -46,15 +28,10 @@ def read_manifest(uri: str) -> list[dict]:
     return [json.loads(ln) for ln in io.read_text(uri).splitlines() if ln.strip()]
 
 
-# --------------------------------------------------------------------------------------
-# Local docker executor
-# --------------------------------------------------------------------------------------
 def _aws_creds() -> dict:
-    """AWS_* env to hand a container: the active session's frozen credentials plus region. boto3
-    resolves whatever the host uses (an assume-role profile, SSO, env keys, instance profile), so a
-    profile that assumes a role yields temporary keys the container can use — unlike a bare
-    AWS_PROFILE, which is inert without ~/.aws or the source credentials inside the container."""
-    import boto3  # lazy: unit tests / docker-less paths don't need credentials
+    """AWS_* env to hand a container: the active session's frozen credentials plus region. 
+    Resolving via boto3 yields temporary keys an assume-role/SSO profile."""
+    import boto3
 
     session = boto3.Session()
     env = {}
@@ -71,10 +48,8 @@ def _aws_creds() -> dict:
 
 def docker_run(image: str, command: list[str], *, env: dict | None = None,
                store: str | None = None, creds: dict | None = None) -> None:
-    """One ``docker run --rm`` mirroring a Batch job: forward the host's AWS credentials (``creds``,
-    defaulting to :func:`_aws_creds`) and set ``env`` (the job-definition environment). ``store`` is
-    the local stand-in for the S3 store — bind-mounted at the same absolute path and pointed at by
-    ``BII_STAGED_ROOT`` / ``BII_OUT_ROOT``, so the container reads the manifest and writes its COGs to it."""
+    """One ``docker run --rm`` mirroring a Batch job. ``store`` stands in for the S3 store —
+    bind-mounted at the same absolute path and pointed at by ``BII_STAGED_ROOT`` / ``BII_OUT_ROOT``."""
     args = ["docker", "run", "--rm"]
     if store:
         args += ["-v", f"{store}:{store}"]
@@ -83,8 +58,6 @@ def docker_run(image: str, command: list[str], *, env: dict | None = None,
     args += [a for k in creds for a in ("-e", k)]  # -e NAME (not NAME=value): keeps secrets off argv/ps
     args += [a for k, v in (env or {}).items() for a in ("-e", f"{k}={v}")]
     args += [image, *command]
-    # Capture combined output so a failing unit's traceback survives in the run report; echo it
-    # through once the unit finishes (the container output never streamed live anyway).
     proc = subprocess.run(args, env={**os.environ, **creds}, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True)
     sys.stdout.write(proc.stdout)
@@ -95,12 +68,10 @@ def docker_run(image: str, command: list[str], *, env: dict | None = None,
 def run_docker(items: list[dict], command: list[str], *, manifest_uri: str, env: dict | None = None,
                store: str | None = None, image: str | None = None, label=None) -> list[dict]:
     """Run ``command`` in one ``docker run`` per manifest line — the local mirror of the Batch array.
-    The image is ``BII_STAGE_IMAGE`` (default ``bii``); each container reads line
-    ``AWS_BATCH_JOB_ARRAY_INDEX`` of the manifest at ``manifest_uri`` (``BII_MANIFEST``). ``env`` is
-    extra container environment (e.g. the processing run id). Continues past a container that exits
-    non-zero; returns ``{"index", "error"}`` per failure."""
+    Image defaults to ``BII_STAGE_IMAGE``. Continues past a non-zero exit; returns
+    ``{"index", "error"}`` per failure."""
     image = image or os.environ.get("BII_STAGE_IMAGE", "bii")
-    creds = _aws_creds()  # resolve the host session once, not per container
+    creds = _aws_creds()
     n = len(items)
     failed: list[dict] = []
     for i, it in enumerate(items):
@@ -115,13 +86,10 @@ def run_docker(items: list[dict], command: list[str], *, manifest_uri: str, env:
     return failed
 
 
-# --------------------------------------------------------------------------------------
-# AWS Batch executor
-# --------------------------------------------------------------------------------------
 def batch_client(client=None):
     if client is not None:
         return client
-    import boto3  # lazy so unit tests don't need credentials
+    import boto3
 
     return boto3.client("batch")
 
@@ -129,11 +97,9 @@ def batch_client(client=None):
 def submit_array(*, size: int, job_name: str, command: list[str] | None = None,
                  environment: dict | None = None, job_queue: str | None = None,
                  job_definition: str | None = None, attempts: int = 3, client=None) -> str:
-    """Submit a manifest as a Batch array job; return the job id. Index N runs line N
-    (``size == 1`` submits a plain non-array job, since arrays need >= 2). ``command`` overrides the
-    job definition's default; ``environment`` is the container env. ``attempts`` drives the
-    Spot-friendly ``retryStrategy``. Queue/definition fall back to ``BII_BATCH_QUEUE`` /
-    ``BII_BATCH_JOB_DEF``."""
+    """Submit a manifest as a Batch array job; return the job id. ``size == 1`` submits a plain
+    non-array job (Batch arrays need >= 2). ``attempts`` drives the Spot-friendly ``retryStrategy``.
+    Queue/definition fall back to ``BII_BATCH_QUEUE`` / ``BII_BATCH_JOB_DEF``."""
     job_queue = job_queue or os.environ.get("BII_BATCH_QUEUE")
     job_definition = job_definition or os.environ.get("BII_BATCH_JOB_DEF")
     if not job_queue or not job_definition:
@@ -151,13 +117,12 @@ def submit_array(*, size: int, job_name: str, command: list[str] | None = None,
     return batch_client(client).submit_job(**kwargs)["jobId"]
 
 
-# Batch array child states, ordered submitted -> done, for a stable one-line progress summary.
+# Batch array child states ordered submitted -> done, for a stable progress summary.
 _ARRAY_STATES = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING", "SUCCEEDED", "FAILED")
 
 
 def wait_for_array(job_id: str, *, client=None) -> str:
-    """Poll Batch until ``job_id`` is SUCCEEDED or FAILED; return that state. Each poll prints the
-    array's per-state child counts to stderr so a long fan-out shows live progress."""
+    """Poll Batch until ``job_id`` is SUCCEEDED or FAILED; return that state."""
     client = batch_client(client)
     while True:
         job = client.describe_jobs(jobs=[job_id])["jobs"][0]
@@ -172,14 +137,13 @@ def wait_for_array(job_id: str, *, client=None) -> str:
 
 
 def terminate_job(job_id: str, *, client=None, reason: str = "orchestrator interrupted") -> None:
-    """Terminate ``job_id`` (cancels not-yet-started children and kills running ones), so an
-    interrupted orchestrator doesn't leave the array job draining the queue and spending."""
+    """Terminate ``job_id`` so an interrupted orchestrator doesn't leave the array job spending."""
     batch_client(client).terminate_job(jobId=job_id, reason=reason)
 
 
 def failed_children(job_id: str, client=None) -> dict[int, str]:
-    """``{array-child index: failure detail}`` for the children of ``job_id`` that ended FAILED after
-    retries (paginated). Detail is the status / container exit code / reason from the summary."""
+    """``{array-child index: failure detail}`` for children of ``job_id`` that ended FAILED after
+    retries."""
     client = batch_client(client)
     out: dict[int, str] = {}
     token = None
@@ -206,10 +170,9 @@ def failed_children(job_id: str, client=None) -> dict[int, str]:
 
 def run_batch(items: list[dict], command: list[str], *, manifest_uri: str, env: dict | None = None,
               job_name: str, client=None, wait_fn=None) -> list[dict]:
-    """Submit the manifest as one Batch array job running ``command``, wait for it, and return the
-    lines whose child ended FAILED after retries (``{"index", "error"}``) — parity with
-    ``run_docker``'s non-zero-exit failures. ``env`` is extra container environment. A unit that
-    produces nothing exits 0, not failed. An interrupt while waiting terminates the job first."""
+    """Submit the manifest as one Batch array job running ``command``, wait, and return the lines
+    whose child ended FAILED after retries (``{"index", "error"}``). An interrupt while waiting
+    terminates the job first."""
     wait_fn = wait_fn or wait_for_array
     job_id = submit_array(size=len(items), job_name=job_name, command=command,
                           environment={MANIFEST_ENV: manifest_uri, **(env or {})}, client=client)
@@ -218,21 +181,17 @@ def run_batch(items: list[dict], command: list[str], *, manifest_uri: str, env: 
     except BaseException:
         terminate_job(job_id, client=client)
         raise
-    if status == "FAILED":  # a non-array job (size 1) is just index 0
+    if status == "FAILED":
         detail = {0: "batch job failed"} if len(items) == 1 else failed_children(job_id, client)
         return [{"index": i, "error": detail[i]} for i in sorted(detail)]
     return []
 
 
-# --------------------------------------------------------------------------------------
-# Dispatch + container entrypoint — the two halves both drivers share
-# --------------------------------------------------------------------------------------
 def run_manifest(items: list[dict], command: list[str], *, executor: str, manifest_uri: str,
                  job_name: str, env: dict | None = None, store: str | None = None, label=None,
                  client=None, wait_fn=None) -> list[dict]:
-    """Write ``items`` to ``manifest_uri`` and run ``command`` over them via ``executor`` (``docker``
-    locally / ``batch`` on AWS); return the failed lines as ``{"index", "error"}``. ``store`` and
-    ``label`` apply to the docker executor only (ignored on batch)."""
+    """Write ``items`` to ``manifest_uri`` and run ``command`` over them via ``executor``
+    (``docker`` / ``batch``); return the failed lines. ``store`` and ``label`` apply to docker only."""
     write_manifest(items, manifest_uri)
     if executor == "docker":
         return run_docker(items, command, manifest_uri=manifest_uri, env=env, store=store, label=label)
@@ -243,8 +202,7 @@ def run_manifest(items: list[dict], command: list[str], *, executor: str, manife
 
 
 def manifest_line() -> dict:
-    """The manifest line this container handles — line ``AWS_BATCH_JOB_ARRAY_INDEX`` of the manifest
-    at ``BII_MANIFEST``. The worker entrypoints (``bii-process`` / ``bii-stage``) read it."""
+    """The manifest line this container handles — line ``AWS_BATCH_JOB_ARRAY_INDEX`` of the manifest."""
     manifest = os.environ.get(MANIFEST_ENV)
     if not manifest:
         raise SystemExit(f"{MANIFEST_ENV} must point at the manifest")

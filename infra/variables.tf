@@ -22,9 +22,8 @@ variable "max_vcpus" {
   default     = 256
 }
 
-# Memory-optimized (1:8 vCPU:mem, matches job_vcpu:job_memory) with local NVMe instance store for
-# scratch (see launch_template.tf). r8gd is current gen; r7gd/r6gd widen the Spot pool for
-# CAPACITY_OPTIMIZED. arm64 only — the image is arm64, so don't add x86 (r6id/r5d) here.
+# Memory-optimized (1:8 vCPU:mem) with NVMe scratch (launch_template.tf). 
+# image built for arm64
 variable "instance_types" {
   description = "Instance families Batch may launch (Graviton R-family, NVMe-backed)."
   type        = list(string)
@@ -37,18 +36,14 @@ variable "job_vcpu" {
   default     = 2
 }
 
-# ~4x the arrays at the larger raster size. Starting point — tune against a real chunk. Held ~1 GiB
-# under 8 GiB/vCPU so a job fits the smallest instance (.large) after kernel + ECS-agent reserve, and
-# 2/4/8 jobs pack the .xlarge/.2xlarge/.4xlarge at full vCPU.
+# Hold ~1 GiB under 8 GiB/vCPU so a job fits with overhead
 variable "job_memory" {
   description = "MiB of memory per job."
   type        = number
   default     = 15360
 }
 
-# Image defaults to the Tofu-created ECR repo at :latest. Pin to a digest
-# (repo@sha256:...) here once scripts/push_images.sh has pushed, so Batch runs the exact image
-# you tested locally. null -> repo:latest (see locals in ecr.tf).
+# Pin var.image to a digest (repo@sha256:...) so Batch runs the exact image tested locally.
 variable "local_principal_arn" {
   description = "IAM principal allowed to assume the local role (null = account root)."
   type        = string

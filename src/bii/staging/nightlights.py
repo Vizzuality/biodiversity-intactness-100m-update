@@ -1,8 +1,6 @@
 """Stage VIIRS Nighttime Lights (VNL) annual median composites -> COG per year.
 
-Source rasters are gzipped global GeoTIFFs (``.tif.gz``) mirrored to the public
-``vizz-bii`` bucket; the filenames embed an unpredictable per-release timestamp, so each
-year's object is listed explicitly in :data:`URLS` and fetched over HTTPS (no auth).
+Filenames embed an unpredictable per-release timestamp, so each year is listed explicitly.
 """
 
 from __future__ import annotations
@@ -38,6 +36,5 @@ def list_units(years: list[int] | None = None) -> list[dict]:
 def stage_unit(unit: dict) -> bool:
     year = unit["year"]
     url = unit.get("url") or URLS[year]
-    # .tif.gz read through /vsigzip after translate_to_cog fetches it to disk.
     cog.translate_to_cog(url, _dst(year), resampling="average")
     return True

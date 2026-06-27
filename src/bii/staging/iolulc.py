@@ -1,17 +1,9 @@
 """Stage Impact Observatory annual LULC (landcover) -> footprint index only (no re-COG).
 
-Unlike every other staged asset, IO LULC is **never copied**: it is already cloud-optimized
-and AWS-hosted, so the model reads the original STAC item hrefs in place at processing time
-(the project's "avoid moving data" principle). This module moves no pixels — it walks the IO
-STAC once at staging time and writes the ``{geometry, uri}`` GeoParquet index (one per year)
-that :func:`bii.tile_index.lookup` queries via ``.sindex``.
-
-This replaces the old per-chunk live STAC search (``tile_index._lookup_lulc``): the global
-walk happens once during staging instead of on every chunk read.
-
-One unit per year -> one Batch array index. Each year writes a distinct per-year index file
-(:func:`bii.tile_index.index_uri`) directly — this asset has no COGs, so the orchestrator's
-rebuild-from-COGs step skips it (it is listed in ``stage.INDEX_IN_PLACE``).
+IO LULC is never copied: it is already cloud-optimized and AWS-hosted, so the model reads the
+original STAC item hrefs in place. This walks the IO STAC once and writes a ``{geometry, uri}``
+GeoParquet index per year. No COGs, so the orchestrator's rebuild-from-COGs step skips it
+(listed in ``stage.INDEX_IN_PLACE``).
 """
 
 from __future__ import annotations
@@ -21,15 +13,13 @@ from shapely.geometry import box, shape
 from .. import config, tile_index
 
 ASSET = "landcover"
-# Impact Observatory 10 m annual LULC, AWS-hosted, covers 2017-2024. Read in place; the index
-# stores the original item hrefs so cog_worker mosaics them directly at processing time.
+# IO 10 m annual LULC, covers 2017-2024.
 STAC_URL = "https://api.impactobservatory.com/stac-aws"
 COLLECTION = "io-10m-annual-lulc"
 
 
 def list_units(years: list[int] | None = None) -> list[dict]:
-    # ``dst`` is the per-year index parquet itself (this asset's only product — no COG), so the
-    # orchestrator's skip-if-exists check works uniformly with the COG-producing modules.
+    # ``dst`` is the per-year index parquet itself so skip-if-exists works like COG modules.
     return [{"id": str(y), "year": y, "dst": tile_index.index_uri(ASSET, y)}
             for y in (years or config.years())]
 

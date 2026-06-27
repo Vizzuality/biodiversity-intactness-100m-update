@@ -1,5 +1,3 @@
-# Single repo for the merged image. push_images.sh builds + pushes here; both job definitions
-# reference it (see locals). Untagged images expire so old layers don't accumulate.
 resource "aws_ecr_repository" "this" {
   name                 = var.name # "bii"
   image_tag_mutability = "MUTABLE"
@@ -20,6 +18,5 @@ locals {
       action       = { type = "expire" }
     }]
   })
-  # Job-definition image: a pinned digest from var, else the repo at :latest.
   image = coalesce(var.image, "${aws_ecr_repository.this.repository_url}:latest")
 }

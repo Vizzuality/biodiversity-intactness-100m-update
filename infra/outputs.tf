@@ -1,4 +1,4 @@
-# These map straight onto the .env vars the pipeline reads (BII_BATCH_* / BII_STAGE_*).
+# Map onto the pipeline's .env vars (BII_BATCH_* / BII_STAGE_*).
 output "batch_job_queue" {
   description = "BII_BATCH_QUEUE"
   value       = aws_batch_job_queue.this.name

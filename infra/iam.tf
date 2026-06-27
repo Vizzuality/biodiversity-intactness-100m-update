@@ -1,7 +1,4 @@
-# Three roles. The compute environment uses Batch's service-linked role automatically (not set
-# here), and SPOT_CAPACITY_OPTIMIZED uses the Spot service-linked role, so no Spot fleet role.
-
-# 1. EC2 instance role: the ECS agent on each Spot instance — pulls images from ECR, ships logs.
+# 1. EC2 Instance role
 resource "aws_iam_role" "instance" {
   name = "${var.name}-instance"
   assume_role_policy = jsonencode({
@@ -23,8 +20,7 @@ resource "aws_iam_instance_profile" "instance" {
   name = "${var.name}-instance"
   role = aws_iam_role.instance.name
 }
-
-# 2. Job role: the container's own credentials — read/write the pipeline bucket.
+# 2. Container job 
 resource "aws_iam_role" "job" {
   name = "${var.name}-job"
   assume_role_policy = jsonencode({
@@ -57,9 +53,7 @@ resource "aws_iam_role_policy" "job_s3" {
   })
 }
 
-# Local role: assume from your own AWS identity to run the pipeline locally — same S3 access as the
-# job role, plus submitting + monitoring Batch jobs. Trusted by the account root by default (so any
-# IAM principal you grant sts:AssumeRole can use it), or pin a single principal via local_principal_arn.
+# 3. Local role for delegated user access
 resource "aws_iam_role" "local" {
   name = "${var.name}-local"
   assume_role_policy = jsonencode({

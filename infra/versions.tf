@@ -1,5 +1,4 @@
-# OpenTofu / Terraform >= 1.6, AWS provider 5.x. Region comes from the AWS_REGION env var (the
-# same .env the pipeline uses), so it is not set here. State is local for now — see README.md.
+
 terraform {
   required_version = ">= 1.6"
   required_providers {

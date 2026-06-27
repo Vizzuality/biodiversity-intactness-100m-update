@@ -1,7 +1,6 @@
-"""Stage WorldPop R2025A per-country 100 m population -> COG per country/year.
+"""Stage WorldPop R2025A per-country 100 m population -> COG per (country, year).
 
-A multipart dataset: one COG per (country, year). Population counts are continuous, so
-overviews use ``average``; the source nodata is preserved by the translate.
+Counts are continuous, so overviews use ``average``.
 """
 
 from __future__ import annotations
@@ -11,14 +10,11 @@ from .. import cog
 
 ASSET = "population"
 
-# WorldPop R2025A, per-country 100 m, annual. NOTE: the R2025A 100 m release is *constrained*
-# (the only 100 m product published); the original whitepaper used the older unconstrained
-# product. The host does not support HTTP range requests, so WorldPop is fetched to ephemeral
-# disk per country and then re-COG'd (not pure-streamed).
+# R2025A 100 m is *constrained* (the only 100 m product); the original version used the older
+# unconstrained product.
 BASE = "https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A"
-# Every country/territory published in the R2025A release, minus those with no constrained 100 m
-# tif (uninhabited / special territories, which always fail). Static so list_units needs no
-# network; regenerate by listing ``{BASE}/<year>/`` 3-letter dir names and dropping the excluded.
+# R2025A countries minus confirmed with no data (uninhabited/special territories);
+# Regenerate from ``{BASE}/<year>/`` 3-letter dir names.
 COUNTRIES = [
     "ABW", "AFG", "AGO", "AIA", "ALA", "ALB", "AND", "ARE", "ARG", "ARM",
     "ASM", "ATG", "AUS", "AUT", "AZE", "BDI", "BEL", "BEN", "BES",
@@ -75,7 +71,5 @@ def list_units(
 
 def stage_unit(unit: dict) -> bool:
     dst = _dst(unit["iso3"], unit["year"])
-    # translate_to_cog downloads the GeoTIFF to disk before re-COG'ing (WorldPop's host has no HTTP
-    # range support). A missing country/year raises and fails the run.
     cog.translate_to_cog(unit["url"], dst, resampling="average")
     return True

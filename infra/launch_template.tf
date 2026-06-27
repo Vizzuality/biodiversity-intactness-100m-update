@@ -1,9 +1,5 @@
-# Launch template that puts container scratch on the instance-store NVMe instead of the default
-# 30 GB gp3 root. The staging/processing temp churn (source download + COG-driver intermediate +
-# the staged temp before upload — up to ~3x output size, per job, and jobs bin-pack onto one
-# instance) is the IO bottleneck at the larger raster size; NVMe local disk removes EBS throughput
-# and capacity as a variable. Pointing Docker's data-root at it moves every container's /tmp there
-# with no job-def or code change. MIME multipart so Batch can append its own ECS bootstrap.
+# Puts container scratch / docker root on instance-store NVMe
+# MIME multipart so Batch can append its own ECS bootstrap.
 locals {
   scratch_user_data = <<-EOT
     MIME-Version: 1.0

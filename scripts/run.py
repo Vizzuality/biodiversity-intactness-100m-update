@@ -32,7 +32,7 @@ def main(argv=None) -> dict:
     args = parser.parse_args(argv)
 
     store = os.path.abspath(args.staged) if args.staged else None
-    if store:  # host-side too, so chunk_manifest reads the local coverage index
+    if store:  # set host-side so chunk_manifest reads the local coverage index
         config.STAGED_ROOT = config.OUT_ROOT = store
 
     manager = Manager(bounds=tuple(args.bounds), scale=config.SCALE_DEG, proj=config.PROJ, buffer=config.BUFFER)

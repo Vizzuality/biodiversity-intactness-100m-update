@@ -1,17 +1,7 @@
 #!/usr/bin/env python
-"""Stage only the inputs overlapping a small AOI, locally, via the Batch-mirroring docker executor.
+"""Stage only the inputs overlapping a small AOI, locally, via the docker executor.
 
-For a one-region / one-year BII run, staging the whole world is wasteful. This subsets each dataset
-to an AOI before staging. The AOI overlap logic lives here so the dataset modules stay untouched:
-
-* hansen (10deg tiles) + roads (Geofabrik regions) filter by their own unit bounds.
-* worldpop (ISO3) + sdpt (region code) filter by a vendored country bbox table
-  (``scripts/data/country_bounds.json``); pass ``--countries`` / ``--regions`` to override.
-* iolulc (index-only) + the global single-file datasets (nightlights, accessibility, fml) are
-  staged whole — ``tile_index.lookup`` windows them to the chunk at processing time.
-
-Staging runs through ``bii.stage``'s docker executor — the same manifest + array-index + env
-contract as AWS Batch, with a bind-mounted local dir standing in for the S3 store:
+worldpop/sdpt filter by a vendored country bbox table (``scripts/data/country_bounds.json``).
 
     python scripts/stage_local.py --bounds -86 9 -84 11 --year 2020 --staged ./data/staged_local
 """
@@ -31,14 +21,13 @@ COUNTRY_BOUNDS = os.path.join(os.path.dirname(__file__), "data", "country_bounds
 
 
 def _intersects(a, b) -> bool:
-    """Whether ``a`` overlaps the ``(west, south, east, north)`` box ``b``. ``a`` is one such box,
-    or a list of boxes (antimeridian-crossing countries are split at the dateline)."""
+    """``a`` is a box or list of boxes (antimeridian-crossing countries split at the dateline)."""
     boxes = a if isinstance(a[0], (list, tuple)) else [a]
     return any(not (x[2] < b[0] or x[0] > b[2] or x[3] < b[1] or x[1] > b[3]) for x in boxes)
 
 
 def _hansen_bounds(unit: dict) -> tuple[float, float, float, float]:
-    """The EPSG:4326 extent of a Hansen 10deg tile from its NW-corner ``lat``/``lon`` labels."""
+    """EPSG:4326 extent of a Hansen 10deg tile from its NW-corner ``lat``/``lon`` labels."""
     lat, lon = unit["lat"], unit["lon"]
     north = int(lat[:2]) * (1 if lat[2] == "N" else -1)
     west = int(lon[:3]) * (1 if lon[3] == "E" else -1)
@@ -46,16 +35,14 @@ def _hansen_bounds(unit: dict) -> tuple[float, float, float, float]:
 
 
 def _roads_ids(aoi) -> set:
-    """Region ids whose actual Geofabrik geometry intersects the AOI (precise, not the bbox — some
-    regions cross the antimeridian, so their bounding box spans the globe)."""
+    """Region ids by precise Geofabrik geometry, not bbox (some regions' bbox spans the globe)."""
     gdf = roads._manifest()
     return set(gdf[gdf.intersects(box(*aoi))]["id"])
 
 
 def _aoi_items(datasets, year, aoi, cbounds, countries, regions) -> list[dict]:
-    """The AOI-scoped manifest items per dataset (dataset modules untouched). worldpop/sdpt units
-    are *generated* for the AOI's countries via ``list_units(countries=/regions=)`` — not filtered
-    from the module's partial default list — so any country the source covers is reachable."""
+    """worldpop/sdpt units are generated for the AOI's countries (not filtered from the module's
+    partial default list) so any country the source covers is reachable."""
     aoi_isos = {c for c, b in cbounds.items() if _intersects(b, aoi)}
     items: list[dict] = []
     for name in datasets:
@@ -67,12 +54,12 @@ def _aoi_items(datasets, year, aoi, cbounds, countries, regions) -> list[dict]:
             units = [u for u in mod.list_units() if u["id"] in road_ids]
         elif name == "worldpop":
             units = mod.list_units(countries=sorted(countries or aoi_isos), years=[year])
-        elif name == "sdpt":  # map AOI ISO3s to sdpt regions (Europe folds into "eu")
+        elif name == "sdpt":  # Europe folds into "eu"
             regs = {r.lower() for r in regions} if regions else sdpt.regions_for(aoi_isos)
             units = mod.list_units(regions=sorted(regs)) if regs else []
         elif name in ("nightlights", "iolulc"):
             units = mod.list_units(years=[year])
-        else:  # travel_time, fml — single global file
+        else:
             units = mod.list_units()
         items += [stage.manifest_item(name, u) for u in units]
     return items
@@ -96,7 +83,7 @@ def main(argv=None) -> dict:
     config.STAGED_ROOT = config.OUT_ROOT = staged
     config.START_YEAR = config.END_YEAR = args.year
 
-    # Pad the AOI by the processing buffer so edge focal/distance ops have source data.
+    # Pad by the processing buffer so edge focal/distance ops have source data.
     pad = config.BUFFER * config.SCALE_DEG
     w, s, e, n = args.bounds
     aoi = (w - pad, s - pad, e + pad, n + pad)

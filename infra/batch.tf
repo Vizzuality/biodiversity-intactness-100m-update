@@ -1,5 +1,3 @@
-# Managed EC2 Spot compute environment + queue + two job definitions. SPOT_PRICE_CAPACITY_OPTIMIZED
-# uses the Spot service-linked role (no fleet role); the service-linked Batch role is implicit.
 resource "aws_cloudwatch_log_group" "batch" {
   name              = "/aws/batch/${var.name}"
   retention_in_days = 30
@@ -36,8 +34,6 @@ resource "aws_batch_job_queue" "this" {
   }
 }
 
-# Both definitions run the one merged image (processing tools + osmctools); they differ only in the
-# default command. bii-process processes; bii-stage stages every input dataset (OSM included).
 resource "aws_batch_job_definition" "process" {
   name                  = "${var.name}-process"
   type                  = "container"

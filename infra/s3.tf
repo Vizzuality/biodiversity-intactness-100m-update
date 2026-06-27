@@ -1,5 +1,4 @@
-# Two buckets: `outputs` (vizz-bii) holds final COGs + manifests, versioned and kept forever;
-# `processing` (vizz-bii-processing) holds regenerable staged inputs/index, objects auto-deleted.
+# outputs holds final COGs/manifests (versioned, kept); processing holds regenerable staged inputs.
 resource "aws_s3_bucket" "outputs" {
   bucket = var.bucket
 }
@@ -20,7 +19,7 @@ resource "aws_s3_bucket_public_access_block" "this" {
   restrict_public_buckets = each.value.block_policy
 }
 
-# Public read of the published prefixes only: out/ (final COGs) and source/ 
+# Public read limited to published prefixes only.
 resource "aws_s3_bucket_policy" "outputs_public" {
   bucket     = aws_s3_bucket.outputs.id
   depends_on = [aws_s3_bucket_public_access_block.this]
@@ -43,7 +42,6 @@ resource "aws_s3_bucket_versioning" "outputs" {
   }
 }
 
-# Outputs: keep current versions forever
 resource "aws_s3_bucket_lifecycle_configuration" "outputs" {
   bucket = aws_s3_bucket.outputs.id
   rule {

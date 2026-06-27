@@ -1,8 +1,6 @@
 """Stage Oxford MAP travel-time-to-cities (2015 accessibility surface) -> single global COG.
 
-Single-epoch: one snapshot reused across all years. Continuous minutes, so overviews use
-``average``. The Malaria Atlas DirectDownload URL serves a .zip (GeoTIFF + sidecars), read
-via ``/vsizip``; override :data:`URL` if a different epoch/friction-derived surface is used.
+Single epoch reused across all years. Continuous minutes, so overviews use ``average``.
 """
 
 from __future__ import annotations
@@ -14,7 +12,6 @@ from .. import config
 from .. import cog
 
 ASSET = "accessibility"
-# Oxford MAP travel time to cities (2015 accessibility surface). Single epoch.
 URL = (
     "https://data.malariaatlas.org/geoserver/ows"
     "?service=CSW&version=2.0.1&request=DirectDownload"
@@ -33,7 +30,7 @@ def list_units() -> list[dict]:
 def stage_unit(unit: dict | None = None) -> bool:
     unit = unit or {"url": URL}
     dst = _dst()
-    # The DirectDownload URL serves a .zip (the GeoTIFF plus sidecars); read the tif via /vsizip.
+    # DirectDownload serves a .zip (GeoTIFF + sidecars); read the tif via /vsizip.
     zip_path = cog.fetch(unit["url"], suffix=".zip")
     try:
         with zipfile.ZipFile(zip_path) as z:

@@ -1,20 +1,6 @@
-"""Processing: compute BII per chunk (the worker) and drive a whole run (the fan-out).
+"""Processing: compute BII per chunk (worker) and drive a run (fan-out).
 
-The per-chunk worker and the run driver live together because they share the output layout:
-:func:`process` computes one chunk and writes its layer COGs; :func:`run` builds the chunk manifest,
-fans it out via the shared docker/Batch executors in :mod:`bii.orchestration`, and reports the
-chunks that failed. Mirrors :mod:`bii.stage` (driver + worker in one module):
-
-* **worker** — :func:`process` rebuilds a :class:`cog_worker.Worker` from a ``chunk_params`` dict,
-  runs :func:`bii.model.compute_all`, and writes each ``bii_<year>`` layer to the deterministic
-  key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` via :func:`bii.io.staged_local_path`.
-  It always overwrites — the skip-if-exists decision lives in :func:`run`.
-* **driver** — :func:`run` drops non-finite and ocean chunks, skips chunks already fully written
-  (unless ``overwrite``, mirroring ``stage._pending``), fans the rest out, and reports the failed
-  lines (Batch retries each child internally; rerun to pick them up via skip-if-exists).
-
-A chunk is JSON-serializable, so the manifest is plain JSONL and array index N maps to line N — the
-same contract :func:`process` (the ``bii-process`` container command) consumes.
+A chunk is JSON-serializable, so the manifest is plain JSONL and array index N maps to line N.
 """
 
 from __future__ import annotations
@@ -29,72 +15,47 @@ from shapely.geometry import box
 from . import config, model, orchestration, io, tile_index
 from . import cog
 
-# A chunk overlapping no staged landcover footprint can only produce nodata (landcover is the
-# model's nodata mask), so it's dropped as open water. landcover alone is the right predicate:
-# it covers all land we can output, whereas roads only re-cover land landcover already has while
-# adding hundreds of footprints — some globe-spanning, for antimeridian-crossing regions — that
-# loosen the drop for no coverage gain.
+# landcover is the model's nodata mask, so a chunk overlapping no landcover footprint is open
+# water and dropped.
 COVERAGE_ASSETS = ("landcover",)
 
 
-# --------------------------------------------------------------------------------------
-# Output layout
-# --------------------------------------------------------------------------------------
 def output_layers() -> list[str]:
-    """The ``bii_<year>`` layer keys one chunk produces — the keys of ``compute_all``."""
     return [f"bii_{year}" for year in config.years()]
 
 
 def _coord(v: float) -> str:
-    # Fixed precision so the same chunk always maps to the same key (the skip-if-exists check relies on it).
+    # Fixed precision so a chunk always maps to the same key.
     return f"{v:.6f}"
 
 
 def output_uri(run_id: str, layer: str, worker: Worker) -> str:
-    """Deterministic output key for ``layer`` of the chunk ``worker`` covers.
-
-    ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` — ``worker.bounds`` is the chunk's
-    unbuffered extent in the target CRS (EPSG:4326), so ``north`` = top, ``west`` = left.
-    """
+    """Deterministic output key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif``.
+    ``worker.bounds`` is the unbuffered extent in EPSG:4326 (north = top, west = left)."""
     _, _, _, north = worker.bounds
     west = worker.bounds[0]
     return config.out_uri(run_id, layer, f"{layer}_{_coord(north)}_{_coord(west)}.tif")
 
 
-# --------------------------------------------------------------------------------------
-# Worker — compute one chunk, write its layer COGs
-# --------------------------------------------------------------------------------------
 def process(chunk: dict | None = None, run_id: str | None = None) -> None:
-    """Compute BII for one chunk and write every output layer as a COG, always overwriting (:func:`run`
-    is what skips chunks already written). As the ``bii-process`` container entrypoint, reads its chunk
-    from the manifest (``BII_MANIFEST`` + array index) when called with no argument.
-
-    Each layer is written straight to its destination via :func:`bii.io.staged_local_path` — the COG
-    driver builds overviews on a local temp file regardless, so an in-memory file buys nothing.
-    ``worker.write`` clips the buffer, carries the nodata mask, and keeps the array's float32 dtype.
+    """Worker entrypoint: compute BII for one chunk and write every output layer as a COG.
+    Reads its chunk from the manifest (from environment variables) when called with no argument.
     """
     chunk = chunk or orchestration.manifest_line()
     run_id = run_id or config.RUN_ID
     worker = Worker(**chunk)
-    # GDAL read tuning for the remote source reads in compute_all: caches off so a Batch worker's
-    # memory stays bounded, retries on transient HTTP failures.
     with rio.Env(**cog.GDAL_READ_ENV):
         for key, arr in model.compute_all(worker):
             with io.staged_local_path(output_uri(run_id, key, worker)) as out:
                 worker.write(arr, out, driver="COG", overview_resampling="average")
 
 
-# --------------------------------------------------------------------------------------
-# Driver — manifest build (drop non-finite + ocean), skip-done, fan out, retry failed
-# --------------------------------------------------------------------------------------
 def manifest_uri(run_id: str) -> str:
     return config.out_uri(run_id, "chunks.jsonl")
 
 
 def _coverage(assets: tuple[str, ...], year: int) -> gpd.GeoDataFrame | None:
-    """Union ``assets``' footprint indexes into one GeoDataFrame with a built ``.sindex``, or
-    ``None`` if none exist (so the caller keeps every chunk rather than dropping the whole globe).
-    Annual assets are read at ``year``; single-epoch assets at ``year=None``."""
+    """Get coverage assets' index footprints as a GeoDataFrame."""
     frames = []
     for asset in assets:
         gdf = tile_index.read_index(asset, year if asset in model.ANNUAL_ASSETS else None)
@@ -103,7 +64,7 @@ def _coverage(assets: tuple[str, ...], year: int) -> gpd.GeoDataFrame | None:
     if not frames:
         return None
     gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=tile_index.INDEX_CRS)
-    gdf.sindex  # build once; reused across every chunk query below
+    gdf.sindex  # build once; reused across every chunk query
     return gdf
 
 
@@ -114,8 +75,8 @@ def chunk_manifest(
     coverage_assets: tuple[str, ...] = COVERAGE_ASSETS,
     coverage_year: int | None = None,
 ) -> list[dict]:
-    """Enumerate the processable chunks of ``manager`` as ``chunk_params`` dicts (non-finite and
-    ocean chunks dropped). ``coverage_year`` selects the annual coverage index (default: first year)."""
+    """Processable chunks of ``manager`` as ``chunk_params`` dicts (non-finite and ocean chunks
+    dropped)."""
     cov = _coverage(coverage_assets, coverage_year or config.START_YEAR) if coverage_assets else None
     chunks: list[dict] = []
     for params in manager.chunk_params(chunksize):
@@ -124,14 +85,14 @@ def chunk_manifest(
             continue
         if cov is not None and len(cov.sindex.query(box(*bounds), predicate="intersects")) == 0:
             continue
-        # Plain list so the JSONL round-trips identically (chunk_params yields a BoundingBox).
+        # list() so JSONL round-trips identically (chunk_params yields a BoundingBox).
         chunks.append(dict(params, proj_bounds=list(params["proj_bounds"])))
     return chunks
 
 
 def _pending(chunks: list[dict], run_id: str) -> list[dict]:
-    """Chunks missing at least one output layer (skip-if-exists; mirrors ``stage._pending``). Lists
-    the output prefix once, then checks membership in-memory."""
+    """Chunks missing at least one output layer (skip-if-exists). Lists the output prefix once,
+    then checks membership in-memory."""
     present = set(io.list_uris(config.out_uri(run_id)))
     layers = output_layers()
     pending = []
@@ -156,13 +117,13 @@ def run(
     client=None,
     wait_fn=None,
 ) -> dict:
-    """Build the manifest and (when ``submit``) run it via ``executor`` (``docker`` locally / ``batch``
-    on AWS), reporting the chunks whose container/child failed. Failed chunks are not resubmitted —
-    Batch already retries each child (``attempts=3``); rerun ``run`` to pick them up via skip-if-exists.
+    """Build the manifest and (when ``submit``) run it via ``executor`` (``docker`` locally /
+    ``batch`` on AWS), reporting failed chunks. 
 
-    Chunks already fully written are skipped unless ``overwrite``. ``submit=False`` writes only the
-    manifest — the size gate before any Batch spend. ``store`` is the local stand-in store for the
-    docker executor; ``wait_fn`` is injectable so the Batch wait can be driven synchronously in tests."""
+    Already-written chunks are skipped unless ``overwrite``. 
+    ``submit=False`` writes only the manifest. 
+    ``store`` is the local stand-in for the docker executor; 
+    ``wait_fn`` is injectable so the Batch wait can be driven synchronously in tests."""
     run_id = run_id or config.RUN_ID
     chunks = chunk_manifest(manager, chunksize, coverage_assets=coverage_assets, coverage_year=coverage_year)
     pending = chunks if overwrite else _pending(chunks, run_id)

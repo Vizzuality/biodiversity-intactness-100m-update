@@ -1,13 +1,11 @@
 """Integration tests: stage ONE unit of each kind locally, end to end, against real sources.
 
-These hit the network (marked ``integration`` — deselect with ``-m "not integration"``).
-They are the local single-tile gate: stage one tile/country, then confirm the output is a
-valid COG and the tile index can find it.
+Network-bound (marked ``integration`` — deselect with ``-m "not integration"``).
 
-* WorldPop — a *multipart* dataset; stage one whole (small) country.
-* SDPT     — a per-country GDB layer (vector); rasterize one small window + verify empty skip.
-* roads    — a Geofabrik region (vector); download a tiny extract, filter highways, rasterize.
-* iolulc   — landcover; index-only, walk the IO STAC for one year and query the index.
+* WorldPop — multipart dataset; stage one whole small country.
+* SDPT     — per-country GDB layer (vector); rasterize.
+* roads    — Geofabrik region (vector); download extract, filter highways, rasterize.
+* iolulc   — landcover; index-only, walk the IO STAC for one year.
 """
 
 import shutil
@@ -41,26 +39,23 @@ def test_stage_worldpop_country(data_staged):
     dst = worldpop._dst("ALB", 2020)
     _assert_valid_cog(dst)
 
-    # Albania ~ (19.3, 39.6, 21.1, 42.7); a point inside it should hit the tile.
+    # point inside Albania ~ (19.3, 39.6, 21.1, 42.7).
     tile_index.index_cogs("population", year=2020)
     hits = tile_index.lookup("population", (20.0, 41.0, 20.1, 41.1), year=2020)
     assert dst in hits
 
 
 def test_stage_sdpt_country(data_staged):
-    # El Salvador — a small SDPT layer (~175 polygons) that is *also* EPSG:3857, so it exercises
-    # the reprojection-to-grid path (gdal_rasterize won't reproject; ~12% of SDPT country layers
-    # are EPSG:3857/UTM). Staging localizes the layer once to a local 4326 copy, which both fixes
-    # the CRS and (being a small country) keeps this fast. The COG extent is read from the GDB
-    # layer itself — units carry no bounds.
+    # El Salvador — small (~175 polygons) and EPSG:3857, so it exercises the reproject-to-grid
+    # path (~12% of SDPT layers are 3857/UTM; gdal_rasterize won't reproject).
     unit = {"id": "slv", "region": "slv", "layer": "slv_plant_v21"}
     assert sdpt.stage_unit(unit) is True
     dst = sdpt._dst("slv")
-    arr = _assert_valid_cog(dst, dtype="uint8")  # asserts the output COG is EPSG:4326
+    arr = _assert_valid_cog(dst, dtype="uint8")
     assert set(np.unique(arr)).issubset({0, 1})
-    assert arr.max() == 1  # some planted forest present (after reprojection from EPSG:3857)
+    assert arr.max() == 1
 
-    # SDPT shares the forestManagement asset with FML; the index finds the staged tile.
+    # SDPT shares the forestManagement asset with FML.
     tile_index.index_cogs("forestManagement")
     w, s, e, n = cog.footprint(dst, tile_index.INDEX_CRS)
     mid = ((w + e) / 2, (s + n) / 2)
@@ -69,8 +64,7 @@ def test_stage_sdpt_country(data_staged):
 
 
 def test_stage_iolulc_index(data_staged):
-    # Index-only: walk the IO STAC for one year, write the GeoParquet, then query it. No COG
-    # is produced — the index rows point at the original STAC item hrefs (read in place).
+    # Index-only: no COG produced; index rows point at the original STAC hrefs, read in place.
     unit = {"id": "2020", "year": 2020}
     result = iolulc.stage_unit(unit)
 
@@ -79,13 +73,12 @@ def test_stage_iolulc_index(data_staged):
     assert result["year"] == 2020
     assert result["n_items"] > 0
 
-    # The Costa Rica test bounds should hit at least one indexed LULC item for 2020.
+    # Costa Rica test bounds.
     hits = tile_index.lookup("landcover", (-86, 9, -84, 11), year=2020)
     assert hits, "expected landcover index to cover the Costa Rica test bounds"
     assert all(isinstance(h, str) for h in hits)
 
-    # Always rebuilds (existence checks are the orchestrator's job): a second call rewrites the
-    # index and returns a fresh result, never a skip.
+    # Always rebuilds; existence checks are the orchestrator's job.
     again = iolulc.stage_unit(unit)
     assert again is not None and again["n_items"] == result["n_items"]
     assert "skipped" not in again
@@ -100,13 +93,13 @@ def test_stage_roads_region(data_staged):
 
 
 def _check_roads_region():
-    # Christmas Island — a tiny Geofabrik extract, fast to download + filter.
+    # Christmas Island — a tiny Geofabrik extract.
     unit = next(u for u in roads.list_units(regions=["christmas-island"]))
     assert roads.stage_unit(unit) is True
     dst = unit["dst"]
     arr = _assert_valid_cog(dst, dtype="uint8")
     assert set(np.unique(arr)).issubset({0, 1})
-    assert arr.max() == 1  # highways burned
+    assert arr.max() == 1
 
     tile_index.index_cogs("roads")
     w, s, e, n = cog.footprint(dst, tile_index.INDEX_CRS)

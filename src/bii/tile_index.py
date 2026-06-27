@@ -1,18 +1,8 @@
-"""Footprint index: build + query. Replaces the original private STAC API.
+"""Footprint index: build + query.
 
-Each staged asset has a GeoParquet index of ``{geometry (EPSG:4326), uri}`` rows — one row
-per staged COG tile (or, for ``landcover``, one row per in-place IO STAC item href). Every
-asset is queried through one backend: a spatial query of the cached GeoParquet via geopandas
-``.sindex``. :func:`lookup` answers "which tiles overlap this chunk?" for the processing
-worker.
-
-Staging never writes the index. Workers only write COGs (atomically, via
-:func:`bii.io.staged_local_path`), so the index is rebuilt after a run from the COGs that
-actually landed: :func:`index_cogs` enumerates an asset's staged COGs and reads each one's
-header footprint. This makes the index a pure function of the bucket — rebuildable any time,
-and immune to a worker dying between writing a COG and recording it. :func:`build_index` is the
-explicit ``(uri, geometry)`` path used by :mod:`bii.staging.iolulc`, which pre-walks the IO STAC
-so landcover joins the staged backend instead of a live per-chunk search.
+Each staged asset has a GeoParquet index of ``{geometry (EPSG:4326), uri}`` rows — one row per
+staged COG tile (or, for ``landcover``, one row per in-place IO STAC item href), queried via
+geopandas ``.sindex``.
 """
 
 from __future__ import annotations
@@ -28,18 +18,12 @@ from . import cog
 INDEX_CRS = "EPSG:4326"
 
 
-# --------------------------------------------------------------------------------------
-# Index locations
-# --------------------------------------------------------------------------------------
 def index_uri(asset: str, year: int | None = None) -> str:
     if year is None:
         return config.staged_uri(asset, f"{asset}_index.parquet")
     return config.staged_uri(asset, str(year), f"{asset}_{year}_index.parquet")
 
 
-# --------------------------------------------------------------------------------------
-# GeoParquet I/O (gpd reads s3:// directly; writes stage through io)
-# --------------------------------------------------------------------------------------
 def _write_parquet(gdf: gpd.GeoDataFrame, uri: str) -> None:
     with io.staged_local_path(uri) as path:
         gdf.to_parquet(path)
@@ -51,7 +35,7 @@ def _to_gdf(footprints) -> gpd.GeoDataFrame:
     for uri, geom in footprints:
         if isinstance(geom, (tuple, list)):  # (west, south, east, north)
             geoms.append(box(*geom))
-        elif hasattr(geom, "geom_type"):  # already a shapely geometry
+        elif hasattr(geom, "geom_type"):
             geoms.append(geom)
         else:  # geojson-like mapping
             geoms.append(shape(geom))
@@ -59,9 +43,6 @@ def _to_gdf(footprints) -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame({"uri": uris}, geometry=geoms, crs=INDEX_CRS)
 
 
-# --------------------------------------------------------------------------------------
-# Build / rebuild-from-COGs
-# --------------------------------------------------------------------------------------
 def build_index(asset: str, footprints, year: int | None = None) -> str:
     """Write ``{geometry, uri}`` GeoParquet for ``asset``. ``footprints`` is an iterable of
     ``(uri, geometry | (west, south, east, north))``. Dedupes by uri."""
@@ -72,30 +53,25 @@ def build_index(asset: str, footprints, year: int | None = None) -> str:
 
 
 def _asset_cogs(asset: str, year: int | None) -> list[str]:
-    """Staged COG URIs for ``asset``: every ``.tif`` under its prefix (recursive), filtered to the
-    year — annual assets embed the year in the COG path, single-epoch assets take all."""
+    """Staged COG URIs for ``asset`` filtered to ``year`` — annual assets embed the year in the
+    COG path; single-epoch assets (``year=None``) take all."""
     uris = io.list_uris(config.staged_uri(asset) + "/")
     return [u for u in uris if u.endswith(".tif") and (year is None or str(year) in u)]
 
 
 def index_cogs(asset: str, year: int | None = None) -> str:
-    """Rebuild ``asset``'s index from its staged COGs, reading each one's header footprint."""
+    """Rebuild ``asset``'s index from its staged COGs."""
     uris = _asset_cogs(asset, year)
     if not uris:
         raise FileNotFoundError(f"no staged COGs for {asset} {year or ''}".strip())
-    # Footprints are independent network reads; sequential rio.open over S3 stalls on large assets.
+    # Parallel reads of COG headers
     with ThreadPoolExecutor(max_workers=16) as ex:
         footprints = ex.map(lambda u: cog.footprint(u, INDEX_CRS), uris)
         return build_index(asset, zip(uris, footprints), year=year)
 
 
-# --------------------------------------------------------------------------------------
-# Lookup
-# --------------------------------------------------------------------------------------
 def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | None = None) -> list[str]:
-    """Return the source URIs whose footprints intersect ``bounds`` (EPSG:4326).
-
-    All assets — including resolve from their GeoParquet index."""
+    """Return source URIs whose footprints intersect ``bounds`` (EPSG:4326)."""
     uri = index_uri(asset, year)
     if not io.exists(uri):
         return []
@@ -106,12 +82,7 @@ def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | No
 
 
 def read_index(asset: str, year: int | None = None) -> gpd.GeoDataFrame | None:
-    """Return ``asset``'s footprint index as a GeoDataFrame, or ``None`` if it doesn't exist.
-
-    Unlike :func:`lookup` (one spatial query per call), this hands back the whole frame so a
-    caller — the orchestrator's ocean-drop coverage — can build one ``.sindex`` and reuse it
-    against thousands of chunks without re-reading the parquet each time.
-    """
+    """``asset``'s footprint index as a GeoDataFrame, or ``None`` if absent."""
     uri = index_uri(asset, year)
     if not io.exists(uri):
         return None

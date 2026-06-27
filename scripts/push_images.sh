@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Build the merged bii image and push it to ECR, then print the immutable digest to pin into the
-# Batch job definitions (infra/ image) so local docker (`stage.py --executor docker`) and Batch run
-# the identical artifact.
+# Build and push the bii image to ECR; print the digest to pin into Batch job defs so local docker
+# and Batch run the identical artifact.
 #
 #   ./scripts/push_images.sh            # tag = git short sha
 #   ./scripts/push_images.sh v2         # explicit tag
 #
-# Needs: docker, awscli, AWS_REGION (+ creds) in the environment. The ECR repo comes from `tofu apply`.
+# Needs: docker, awscli, AWS_REGION (+ creds) in the environment.
 set -euo pipefail
 
 : "${AWS_REGION:?set AWS_REGION (see .env)}"
@@ -18,7 +17,7 @@ IMAGE="$REGISTRY/bii:$TAG"
 cd "$(dirname "$0")/.."
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
 
-# --platform: Batch runs arm64 (Graviton r8gd/r7gd/r6gd); build arm64 to match (native on an arm64 Mac).
+# Batch runs arm64 (Graviton); build arm64 to match.
 docker build --platform linux/arm64 -t "$IMAGE" .
 docker push "$IMAGE"
 

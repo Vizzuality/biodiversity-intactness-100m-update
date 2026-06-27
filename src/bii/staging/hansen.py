@@ -1,8 +1,7 @@
 """Stage Hansen Global Forest Change ``lossyear`` -> forestLoss COGs (one job per 10deg tile).
 
-Source tiles are 10x10 deg, 30 m, uint8 on GCS. ``lossyear`` encodes the year of loss
-(1-24 = 2001-2024, 0 = no loss), so it is *categorical* — overviews use ``nearest`` and 0 is
-real data, not nodata. Each tile is downloaded then re-COG'd; ocean tiles 404 (no such file).
+``lossyear`` encodes year of loss (1-24 = 2001-2024, 0 = no loss): categorical, so overviews use
+``nearest`` and 0 is real data not nodata. Ocean tiles 404.
 """
 
 from __future__ import annotations
@@ -15,10 +14,9 @@ from .. import cog
 ASSET = "forestLoss"
 LAYER = "lossyear"
 
-# Hansen Global Forest Change v1.12 (forestLoss / lossyear). 10x10 deg, 30 m tiles on GCS.
 BASE = "https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12"
 VERSION = "GFC-2024-v1.12"
-# 10-degree tile origin grid (upper-left corner labels), per Hansen's naming convention.
+# 10deg tile grid, labeled by upper-left corner per Hansen's naming convention.
 LATS = [f"{d:02d}N" for d in range(10, 90, 10)] + ["00N"] + [
     f"{d:02d}S" for d in range(10, 60, 10)
 ]
@@ -47,8 +45,7 @@ def list_units(lats: list[str] | None = None, lons: list[str] | None = None) -> 
 
 
 def stage_unit(unit: dict) -> bool:
-    """Stage one Hansen 10deg tile (whole tile). A 404 is a valid ocean tile (no land) -> skip
-    (``False``); any other error propagates and fails the run."""
+    """Stage one Hansen 10deg tile. A 404 is a valid ocean tile -> skip (``False``)."""
     dst = _dst(unit["lat"], unit["lon"])
     try:
         cog.translate_to_cog(unit["url"], dst, resampling="nearest")

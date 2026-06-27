@@ -1,5 +1,4 @@
-# Use the account's default VPC: its public subnets give Batch instances a public IP + IGW egress
-# (ECR pull, S3, logs) for free, so no NAT gateway, no S3 endpoint, no custom subnets/routes.
+# Default VPC's public subnets give instances IGW egress for free, avoiding a NAT gateway / endpoints.
 data "aws_vpc" "default" {
   default = true
 }
@@ -11,7 +10,6 @@ data "aws_subnets" "default" {
   }
 }
 
-# Egress-only SG for the Batch instances (they make outbound reads/writes; nothing connects in).
 resource "aws_security_group" "batch" {
   name_prefix = "${var.name}-batch-"
   vpc_id      = data.aws_vpc.default.id

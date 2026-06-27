@@ -1,4 +1,4 @@
-"""Unit tests for staging — no network. Exercise config, the COG writer, and the index."""
+"""Unit tests for staging — no network."""
 
 import shutil
 
@@ -12,12 +12,10 @@ from bii import config, io, tile_index
 from bii import cog
 from bii.staging import MODULES
 
-# Vector rasterization shells out to the gdal_rasterize CLI; skip those tests where it's absent.
 _needs_gdal_rasterize = pytest.mark.skipif(
     shutil.which("gdal_rasterize") is None,
     reason="gdal_rasterize CLI not on PATH (required for vector rasterization)",
 )
-# Reprojecting a non-EPSG:4326 source to the grid also shells out to ogr2ogr.
 _needs_gdal_clis = pytest.mark.skipif(
     shutil.which("gdal_rasterize") is None or shutil.which("ogr2ogr") is None,
     reason="gdal_rasterize + ogr2ogr CLIs not on PATH (required for reprojecting rasterization)",
@@ -25,7 +23,7 @@ _needs_gdal_clis = pytest.mark.skipif(
 
 
 def _write_geojson(path, geometries) -> str:
-    """Write a minimal EPSG:4326 FeatureCollection of ``geometries`` (GeoJSON dicts) to ``path``."""
+    """Write an EPSG:4326 FeatureCollection of ``geometries`` (GeoJSON dicts) to ``path``."""
     import json
 
     fc = {"type": "FeatureCollection",
@@ -55,7 +53,6 @@ def test_list_units_shapes():
 
 
 def test_translate_to_cog(local_staged, tmp_path):
-    # Write a tiny source raster, then re-COG it; a valid COG with the source's footprint.
     res, n = config.SCALE_DEG, 64
     transform = Affine.translation(-85.0, 9.0 + n * res) * Affine.scale(res, -res)
     src = str(tmp_path / "src.tif")
@@ -77,7 +74,6 @@ def test_translate_to_cog(local_staged, tmp_path):
     assert fp[0] == pytest.approx(-85.0, abs=1e-6)
     assert fp[3] == pytest.approx(9.0 + n * res, abs=1e-6)
 
-    # Always overwrites (existence checks are the orchestrator's job): a second call just rewrites it.
     cog.translate_to_cog(src, dst, resampling="nearest")
     assert io.exists(dst)
 
@@ -90,7 +86,6 @@ def test_index_build_and_lookup(local_staged):
     ]
     tile_index.build_index("forestLoss", footprints)
 
-    # A bbox straddling the first two tiles returns both, not the third.
     hits = tile_index.lookup("forestLoss", (-81, 1, -79, 2))
     assert set(hits) == {"s3://b/a.tif", "s3://b/b.tif"}
 
@@ -99,7 +94,7 @@ def test_index_build_and_lookup(local_staged):
 
 
 def _write_cog(uri, bounds, n=8):
-    """Write a tiny EPSG:4326 raster covering ``bounds`` (w, s, e, n) to ``uri``."""
+    """Write an EPSG:4326 raster covering ``bounds`` (w, s, e, n) to ``uri``."""
     transform = rio.transform.from_bounds(*bounds, n, n)
     with io.staged_local_path(uri) as path, rio.open(
         path, "w", driver="GTiff", height=n, width=n, count=1,
@@ -111,12 +106,12 @@ def test_index_cogs_rebuilds_from_staged_cogs(local_staged):
     alb = config.staged_uri("population", "2020", "ALB_2020.tif")
     _write_cog(alb, (19, 39, 21, 43))
     _write_cog(config.staged_uri("population", "2020", "CRI_2020.tif"), (-86, 8, -82, 11))
-    _write_cog(config.staged_uri("population", "2019", "ALB_2019.tif"), (19, 39, 21, 43))  # other year
+    _write_cog(config.staged_uri("population", "2019", "ALB_2019.tif"), (19, 39, 21, 43))
 
     uri = tile_index.index_cogs("population", year=2020)
     assert io.exists(uri)
 
-    # The 2019 COG is filtered out; a point in Albania hits only the 2020 tile.
+    # point in Albania.
     hits = tile_index.lookup("population", (20, 40, 20.5, 40.5), year=2020)
     assert hits == [alb]
 
@@ -126,12 +121,11 @@ def test_lookup_missing_index_returns_empty(local_staged):
 
 
 # --------------------------------------------------------------------------------------
-# Vector rasterization (gdal_rasterize-backed helper used by sdpt + roads)
+# Vector rasterization
 # --------------------------------------------------------------------------------------
 def test_snap_grid_snaps_to_bii_grid():
     res = config.SCALE_DEG
     w, h, snapped = cog.snap_grid((10.3, 50.1, 10.7, 50.6))
-    # Origin snaps outward to a grid multiple; width/height match the snapped extent.
     assert (snapped[0] / res) == pytest.approx(round(snapped[0] / res))
     assert (snapped[1] / res) == pytest.approx(round(snapped[1] / res))
     assert w == round((snapped[2] - snapped[0]) / res)
@@ -153,11 +147,10 @@ def test_rasterize_to_cog_polygon_and_line(local_staged, tmp_path):
     assert arr.dtype == np.uint8
     assert set(np.unique(arr)).issubset({0, 1})
     assert arr.sum() > 0
-    # Footprint snaps outward, so it covers the requested bounds.
     fp = cog.footprint(dst, tile_index.INDEX_CRS)
     assert fp[0] <= bounds[0] and fp[3] >= bounds[3]
 
-    # A thin diagonal line still burns (all_touched=True) -> no dropout.
+    # Thin diagonal line must still burn (all_touched=True).
     line = {"type": "LineString", "coordinates": [[10.0, 50.0], [10.5, 50.5]]}
     src2 = _write_geojson(tmp_path / "line.geojson", [line])
     dst2 = config.staged_uri("test", "line.tif")
@@ -166,7 +159,7 @@ def test_rasterize_to_cog_polygon_and_line(local_staged, tmp_path):
 
 
 # --------------------------------------------------------------------------------------
-# sdpt / roads enumeration (no network)
+# sdpt / roads enumeration
 # --------------------------------------------------------------------------------------
 def test_sdpt_units_match_config():
     from bii.staging import sdpt
@@ -180,10 +173,8 @@ def test_sdpt_units_match_config():
 
 @_needs_gdal_clis
 def test_sdpt_stage_unit_reprojects_non_4326_source(local_staged, tmp_path, monkeypatch):
-    # ~12% of SDPT country layers are EPSG:3857/UTM. stage_unit reprojects the layer to the
-    # EPSG:4326 BII grid (via sdpt._localized) before burning — gdal_rasterize burns coordinates
-    # onto the degree grid as-is. Here the remote GDB is swapped for a local 3857 gpkg; without the
-    # reproject the meter coordinates would miss the grid entirely (empty burn). ~0.3° box at 10°E.
+    # ~12% of SDPT country layers are EPSG:3857/UTM. gdal_rasterize burns coordinates onto the
+    # degree grid as-is, so without reprojection the meter coordinates miss the grid (empty burn).
     import geopandas as gpd
     from shapely.geometry import box
 
@@ -203,26 +194,24 @@ def test_sdpt_stage_unit_reprojects_non_4326_source(local_staged, tmp_path, monk
         assert r.crs.to_epsg() == 4326
         arr = r.read(1)
     assert set(np.unique(arr)).issubset({0, 1})
-    assert arr.sum() > 0  # the reprojected polygon actually burned onto the degree grid
+    assert arr.sum() > 0
 
 
 @_needs_gdal_clis
 def test_sdpt_stage_unit_reads_bounds_from_source(local_staged, tmp_path, monkeypatch):
-    # With no explicit window, the per-country COG extent is the layer's own bounds, read back
-    # from the localized copy (production stages whole countries; units carry no bounds).
+    # No explicit window: the COG extent is the layer's own bounds (units carry no bounds).
     import geopandas as gpd
     from shapely.geometry import box
 
     from bii.staging import sdpt
 
-    poly = box(10.0, 45.0, 10.3, 45.3)  # already EPSG:4326
+    poly = box(10.0, 45.0, 10.3, 45.3)
     src = str(tmp_path / "wgs84.gpkg")
     gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326").to_file(src, driver="GPKG", layer="plant")
     monkeypatch.setattr(sdpt, "_source_path", lambda: src)
 
-    assert sdpt.stage_unit({"id": "x", "region": "x", "layer": "plant"}) is True  # no bounds
+    assert sdpt.stage_unit({"id": "x", "region": "x", "layer": "plant"}) is True
     dst = sdpt._dst("x")
-    # The footprint snaps outward from the layer's own extent — it encloses the polygon.
     w, s, e, n = cog.footprint(dst, tile_index.INDEX_CRS)
     assert w <= 10.0 and s <= 45.0 and e >= 10.3 and n >= 45.3
     assert _open_cog_band(dst).sum() > 0
@@ -238,7 +227,6 @@ def test_roads_manifest_units():
     assert u["url"].endswith(".osm.pbf")
     w, s, e, n = u["bounds"]
     assert w < e and s < n
-    # A known leaf region is present and filterable.
     cx = roads.list_units(regions=["christmas-island"])
     assert len(cx) == 1 and cx[0]["id"] == "christmas-island"
     # Duplicate-extent macro-regions are excluded; their children provide coverage instead.

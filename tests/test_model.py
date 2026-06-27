@@ -22,22 +22,22 @@ class _FakeWorker:
 
 
 def _synthetic_layers(n=24):
-    rng = np.random.default_rng(0)  # seed-free determinism: np default_rng is fine offline
+    rng = np.random.default_rng(0)
     shape = (1, n, n)
 
     def masked(arr):
         return np.ma.MaskedArray(arr, mask=np.zeros(shape, bool))
 
-    landcover = np.full(shape, 4, np.int16)  # valid (>1) by default
+    landcover = np.full(shape, 4, np.int16)  # valid (>1)
     landcover[0, :4, :] = 5  # crops
     landcover[0, 4:8, :] = 7  # built area
-    landcover[0, -2:, :] = 0  # nodata (<=1) -> masked in output
+    landcover[0, -2:, :] = 0  # nodata (<=1) -> masked
 
     roads = np.zeros(shape, np.uint8)
-    roads[0, n // 2, n // 2] = 1  # a single road cell so distance transform has a target
+    roads[0, n // 2, n // 2] = 1  # one target cell for the distance transform
 
     return {
-        # forestManagement is raw FML codes; _predictors decodes managed forest (>30 & <55).
+        # raw FML codes; managed forest is >30 & <55.
         "forestManagement": masked(rng.integers(0, 60, shape).astype(np.int16)),
         "accessibility": masked(rng.random(shape) * 2000),
         "roads": roads,
@@ -57,12 +57,11 @@ def test_convolve_preserves_band_shape():
     arr = np.ones((1, 16, 16))
     out = model.convolve(arr, 200, scale=100)
     assert out.shape == (1, 16, 16)
-    assert out == pytest.approx(1.0)  # focal mean of a constant field is the constant
+    assert out == pytest.approx(1.0)  # focal mean of a constant field
 
 
 def test_predictors_decode_managed_forest():
-    # FML managed-forest is codes >30 & <55; forestManagement_100m is the focal mean of that
-    # decoded mask, so an all-managed field gives ~1 and an unmanaged field ~0.
+    # FML managed-forest is codes >30 & <55; forestManagement_100m is the focal mean of that mask.
     base = _synthetic_layers()
 
     def fm_predictor(code):
@@ -81,10 +80,9 @@ def test_calc_bii_product_form_and_masking():
     assert set(out) == {"abundance", "community_similarity", "bii"}
     bii, ab, cs = out["bii"], out["abundance"], out["community_similarity"]
 
-    # BII is the product of the two components (notebook 2 form), not the sum.
     np.testing.assert_allclose(np.ma.filled(bii, 0), np.ma.filled(ab * cs, 0))
 
-    # Nodata landcover (<=1) is masked in every output layer; valid cells are finite.
+    # Nodata landcover (<=1) masked in every output.
     expected_mask = ~(layers["landcover"].data > 1)
     np.testing.assert_array_equal(np.ma.getmaskarray(bii), expected_mask)
     assert np.isfinite(bii.compressed()).all()
@@ -93,5 +91,4 @@ def test_calc_bii_product_form_and_masking():
 
 def test_calc_bii_return_all_includes_predictors():
     out = model.calc_bii(_FakeWorker(), _synthetic_layers(), year=2020, return_all=True)
-    # return_all merges inputs + predictors + results.
     assert {"bii", "Intercept", "forestManagement_100m", "landcover"} <= set(out)

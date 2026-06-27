@@ -19,7 +19,7 @@ class _FakeBatch:
         self.submissions.append(kwargs)
         return {"jobId": f"job-{len(self.submissions)}"}
 
-    def list_jobs(self, **kwargs):  # array children that ended FAILED
+    def list_jobs(self, **kwargs):
         return {"jobSummaryList": [
             {"arrayProperties": {"index": i}, "status": "FAILED",
              "container": {"exitCode": 1, "reason": "OutOfMemoryError"}}
@@ -88,9 +88,9 @@ def test_run_docker_one_container_per_line(monkeypatch):
                                       env={"BII_RUN_ID": "v1"})
     assert failed == []
     assert len(calls) == 2 and "img" in calls[0] and calls[0][-1] == "bii-stage"
-    # the array index is the manifest line (mirrors Batch).
+    # array index is the manifest line (mirrors Batch).
     assert "AWS_BATCH_JOB_ARRAY_INDEX=0" in calls[0] and "AWS_BATCH_JOB_ARRAY_INDEX=1" in calls[1]
-    assert "BII_MANIFEST=m" in calls[0] and "BII_RUN_ID=v1" in calls[0]  # extra env forwarded
+    assert "BII_MANIFEST=m" in calls[0] and "BII_RUN_ID=v1" in calls[0]
 
 
 def test_run_docker_continues_past_failure_and_reports_index(monkeypatch):
@@ -99,7 +99,7 @@ def test_run_docker_continues_past_failure_and_reports_index(monkeypatch):
                         lambda cmd, **kw: SimpleNamespace(returncode=2, stdout="boom"))
     failed = orchestration.run_docker(_items(2), ["bii-stage"], manifest_uri="m")
     assert [f["index"] for f in failed] == [0, 1]
-    # the failure error is the tail of the container's combined output.
+    # error is the tail of the container's combined output.
     assert failed[0]["error"] == "boom"
 
 
@@ -163,7 +163,7 @@ def test_run_manifest_writes_manifest_and_dispatches_to_docker(local_roots, monk
     failed = orchestration.run_manifest(_items(2), ["bii-process"], executor="docker",
                                         manifest_uri=uri, job_name="bii")
     assert failed == [] and len(calls) == 2
-    assert orchestration.read_manifest(uri) == _items(2)  # the manifest was written for the worker
+    assert orchestration.read_manifest(uri) == _items(2)
 
 
 def test_run_manifest_rejects_unknown_executor(local_roots):
