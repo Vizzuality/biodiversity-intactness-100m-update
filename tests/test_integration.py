@@ -18,7 +18,8 @@ import rasterio as rio
 from rio_cogeo.cogeo import cog_validate
 
 from bii import tile_index
-from bii.staging import cog, iolulc, roads, sdpt, worldpop
+from bii import cog
+from bii.staging import iolulc, roads, sdpt, worldpop
 
 pytestmark = pytest.mark.integration
 

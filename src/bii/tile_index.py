@@ -23,7 +23,7 @@ import geopandas as gpd
 from shapely.geometry import box, shape
 
 from . import config, s3io
-from .staging import cog
+from . import cog
 
 INDEX_CRS = "EPSG:4326"
 

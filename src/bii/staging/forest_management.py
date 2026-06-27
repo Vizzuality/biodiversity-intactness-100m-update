@@ -12,7 +12,7 @@ staging unit, one Batch job, streamed in place via ``/vsicurl`` (Zenodo supports
 from __future__ import annotations
 
 from .. import config
-from . import cog
+from .. import cog
 
 ASSET = "forestManagement"
 PROVIDER = "fml"

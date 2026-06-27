@@ -31,7 +31,7 @@ import rasterio.shutil
 import requests
 from rasterio.warp import transform_bounds
 
-from .. import config, s3io
+from . import config, s3io
 
 # GDAL options for reading sources during staging: caches off so a Batch worker's memory stays
 # bounded; retry transient HTTP failures. Also reused by bii.process for the compute reads.

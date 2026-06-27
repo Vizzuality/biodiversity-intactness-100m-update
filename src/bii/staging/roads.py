@@ -15,7 +15,7 @@ sub-type/tunnel drops (footpaths, cycleways, tracks, ...) that the GDAL OSM driv
 :data:`OSM_DROP_TUNNELS`) mirrors the rasterize-osm notebook's osmfilter pass. The filtered
 ``.osm.pbf`` is handed straight to
 ``gdal_rasterize`` (its ``lines`` layer), so road geometries are never read into Python/geopandas
-— see :func:`bii.staging.cog.rasterize_to_cog`.
+— see :func:`bii.cog.rasterize_to_cog`.
 
 Per-region COGs have variable extent; cog_worker mosaics overlapping regions on the fly at
 processing time and the footprint index handles overlap, so no global mosaic is built.
@@ -31,7 +31,7 @@ import tempfile
 import geopandas as gpd
 
 from .. import config
-from . import cog
+from .. import cog
 
 ASSET = "roads"
 

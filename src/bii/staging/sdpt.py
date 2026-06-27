@@ -11,7 +11,7 @@ The source is a file geodatabase (``.gdb.zip``) with one MultiPolygon layer per 
 Each region layer is one staging unit (one Batch job per country, like WorldPop). Because the GDB
 is remote and ~12% of the country layers are EPSG:3857/UTM rather than 4326, :func:`_localized`
 reprojects the layer to a local EPSG:4326 copy with ``ogr2ogr`` first (``gdal_rasterize`` burns
-onto the degree grid as-is and never reprojects); :func:`bii.staging.cog.rasterize_to_cog` then
+onto the degree grid as-is and never reprojects); :func:`bii.cog.rasterize_to_cog` then
 burns that copy — polygons are never read into Python/geopandas. The per-country COG extent is the
 layer's own bounds, read back from the localized copy, so it needs no externally supplied extent.
 A region with no polygons is skipped, keeping the index lean.
@@ -28,7 +28,7 @@ from contextlib import contextmanager
 import pyogrio
 
 from .. import config
-from . import cog
+from .. import cog
 
 ASSET = "forestManagement"
 PROVIDER = "sdpt"

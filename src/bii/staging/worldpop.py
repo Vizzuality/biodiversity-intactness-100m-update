@@ -7,7 +7,7 @@ overviews use ``average``; the source nodata is preserved by the translate.
 from __future__ import annotations
 
 from .. import config
-from . import cog
+from .. import cog
 
 ASSET = "population"
 

@@ -11,7 +11,7 @@ import os
 import zipfile
 
 from .. import config
-from . import cog
+from .. import cog
 
 ASSET = "accessibility"
 # Oxford MAP travel time to cities (2015 accessibility surface). Single epoch.

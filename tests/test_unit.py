@@ -9,7 +9,8 @@ from affine import Affine
 from rio_cogeo.cogeo import cog_validate
 
 from bii import config, s3io, tile_index
-from bii.staging import MODULES, cog
+from bii import cog
+from bii.staging import MODULES
 
 # Vector rasterization shells out to the gdal_rasterize CLI; skip those tests where it's absent.
 _needs_gdal_rasterize = pytest.mark.skipif(

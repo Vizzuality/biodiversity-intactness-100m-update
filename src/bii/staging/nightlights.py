@@ -8,7 +8,7 @@ year's object is listed explicitly in :data:`URLS` and fetched over HTTPS (no au
 from __future__ import annotations
 
 from .. import config
-from . import cog
+from .. import cog
 
 ASSET = "nightlights"
 

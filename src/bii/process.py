@@ -27,7 +27,7 @@ from cog_worker import Manager, Worker
 from shapely.geometry import box
 
 from . import config, model, orchestration, s3io, tile_index
-from .staging import cog
+from . import cog
 
 # A chunk overlapping no staged landcover footprint can only produce nodata (landcover is the
 # model's nodata mask), so it's dropped as open water. landcover alone is the right predicate:
