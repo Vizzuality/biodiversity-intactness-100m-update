@@ -20,12 +20,12 @@ def exists(uri: str) -> bool:
 
 
 def upload(local_path: str, uri: str) -> None:
-    fs, path = fsspec.core.url_to_fs(uri, auto_mkdir=True)
+    fs, path = fsspec.core.url_to_fs(uri, **({} if is_s3(uri) else {"auto_mkdir": True}))
     fs.put_file(local_path, path)
 
 
 def put_bytes(data: bytes, uri: str) -> None:
-    fs, path = fsspec.core.url_to_fs(uri, auto_mkdir=True)
+    fs, path = fsspec.core.url_to_fs(uri, **({} if is_s3(uri) else {"auto_mkdir": True}))
     fs.pipe_file(path, data)
 
 
