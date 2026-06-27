@@ -8,7 +8,7 @@ import rasterio as rio
 from affine import Affine
 from rio_cogeo.cogeo import cog_validate
 
-from bii import config, s3io, tile_index
+from bii import config, io, tile_index
 from bii import cog
 from bii.staging import MODULES
 
@@ -64,9 +64,9 @@ def test_translate_to_cog(local_staged, tmp_path):
         ds.write(np.ones((n, n), "uint8"), 1)
 
     dst = config.staged_uri("test", "t.tif")
-    assert not s3io.exists(dst)
+    assert not io.exists(dst)
     cog.translate_to_cog(src, dst, resampling="nearest")
-    assert s3io.exists(dst)
+    assert io.exists(dst)
 
     valid, errors, _ = cog_validate(dst)
     assert valid, errors
@@ -79,7 +79,7 @@ def test_translate_to_cog(local_staged, tmp_path):
 
     # Always overwrites (existence checks are the orchestrator's job): a second call just rewrites it.
     cog.translate_to_cog(src, dst, resampling="nearest")
-    assert s3io.exists(dst)
+    assert io.exists(dst)
 
 
 def test_index_build_and_lookup(local_staged):
@@ -101,7 +101,7 @@ def test_index_build_and_lookup(local_staged):
 def _write_cog(uri, bounds, n=8):
     """Write a tiny EPSG:4326 raster covering ``bounds`` (w, s, e, n) to ``uri``."""
     transform = rio.transform.from_bounds(*bounds, n, n)
-    with s3io.staged_local_path(uri) as path, rio.open(
+    with io.staged_local_path(uri) as path, rio.open(
         path, "w", driver="GTiff", height=n, width=n, count=1,
         dtype="uint8", crs="EPSG:4326", transform=transform) as ds:
         ds.write(np.ones((n, n), "uint8"), 1)
@@ -114,7 +114,7 @@ def test_index_cogs_rebuilds_from_staged_cogs(local_staged):
     _write_cog(config.staged_uri("population", "2019", "ALB_2019.tif"), (19, 39, 21, 43))  # other year
 
     uri = tile_index.index_cogs("population", year=2020)
-    assert s3io.exists(uri)
+    assert io.exists(uri)
 
     # The 2019 COG is filtered out; a point in Albania hits only the 2020 tile.
     hits = tile_index.lookup("population", (20, 40, 20.5, 40.5), year=2020)

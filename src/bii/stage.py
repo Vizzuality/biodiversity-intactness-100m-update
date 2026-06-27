@@ -20,7 +20,7 @@ import inspect
 import sys
 import time
 
-from . import config, orchestration, s3io, tile_index
+from . import config, orchestration, io, tile_index
 from .staging import MODULES
 
 # landcover builds its index in place (STAC hrefs, no COGs) -> rebuild-exempt.
@@ -63,7 +63,7 @@ def stage(item: dict | None = None) -> None:
     it writes an ``EMPTY_MARKER`` sentinel so skip-if-exists won't refetch it next run."""
     item = item or orchestration.manifest_line()
     if not MODULES[item["dataset"]].stage_unit(item["unit"]):
-        s3io.put_bytes(b"", item["unit"]["dst"] + EMPTY_MARKER)
+        io.put_bytes(b"", item["unit"]["dst"] + EMPTY_MARKER)
 
 
 def index(item: dict | None = None) -> None:
@@ -83,7 +83,7 @@ def staged_dsts(items: list[dict]) -> set[str]:
     is ``staged_uri(asset, ...)``) — one listing per asset rather than a HEAD per unit, and a
     single-dataset run skips the rest of the tree. Shared by ``_pending`` and the dry-run summary."""
     prefixes = {config.staged_uri(it["asset"]) + "/" for it in items}
-    return {uri for p in prefixes for uri in s3io.list_uris(p)}
+    return {uri for p in prefixes for uri in io.list_uris(p)}
 
 
 def _pending(items: list[dict]) -> list[dict]:

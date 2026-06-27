@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 
-from . import s3io
+from . import io
 
 _POLL_SECONDS = 30.0
 # Env var naming the manifest URI inside a worker container; the array index selects the line.
@@ -34,16 +34,16 @@ MANIFEST_ENV = "BII_MANIFEST"
 
 
 # --------------------------------------------------------------------------------------
-# Manifest JSONL I/O (reuses s3io's S3/local byte helpers)
+# Manifest JSONL I/O (reuses io's S3/local byte helpers)
 # --------------------------------------------------------------------------------------
 def write_manifest(items: list[dict], uri: str) -> str:
     """Write ``items`` as JSONL (one dict per line) to ``uri`` (S3 or local)."""
-    s3io.put_bytes("".join(json.dumps(it) + "\n" for it in items).encode(), uri)
+    io.put_bytes("".join(json.dumps(it) + "\n" for it in items).encode(), uri)
     return uri
 
 
 def read_manifest(uri: str) -> list[dict]:
-    return [json.loads(ln) for ln in s3io.read_text(uri).splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in io.read_text(uri).splitlines() if ln.strip()]
 
 
 # --------------------------------------------------------------------------------------
@@ -121,7 +121,7 @@ def run_docker(items: list[dict], command: list[str], *, manifest_uri: str, env:
 def batch_client(client=None):
     if client is not None:
         return client
-    import boto3  # lazy so unit tests don't need credentials (mirrors s3io._client)
+    import boto3  # lazy so unit tests don't need credentials
 
     return boto3.client("batch")
 

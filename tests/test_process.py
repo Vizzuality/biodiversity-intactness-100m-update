@@ -14,7 +14,7 @@ import rasterio as rio
 from cog_worker import Manager, Worker
 from rio_cogeo.cogeo import cog_validate
 
-from bii import config, orchestration, process, s3io, tile_index
+from bii import config, orchestration, process, io, tile_index
 
 # A tiny EPSG:4326 chunk (coarse scale, no buffer) so synthetic layers are 10x10.
 _CHUNK = {"proj": "EPSG:4326", "scale": 0.1, "buffer": 0, "proj_bounds": (-86.0, 9.0, -85.0, 10.0)}
@@ -65,7 +65,7 @@ def _write_outputs(chunks, run_id):
             mask=np.zeros((1, worker.height, worker.width), bool),
         )
         for layer in process.output_layers():
-            with s3io.staged_local_path(process.output_uri(run_id, layer, worker)) as out:
+            with io.staged_local_path(process.output_uri(run_id, layer, worker)) as out:
                 worker.write(arr, out, driver="COG", overview_resampling="average")
 
 

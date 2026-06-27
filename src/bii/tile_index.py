@@ -7,7 +7,7 @@ asset is queried through one backend: a spatial query of the cached GeoParquet v
 worker.
 
 Staging never writes the index. Workers only write COGs (atomically, via
-:func:`bii.s3io.staged_local_path`), so the index is rebuilt after a run from the COGs that
+:func:`bii.io.staged_local_path`), so the index is rebuilt after a run from the COGs that
 actually landed: :func:`index_cogs` enumerates an asset's staged COGs and reads each one's
 header footprint. This makes the index a pure function of the bucket — rebuildable any time,
 and immune to a worker dying between writing a COG and recording it. :func:`build_index` is the
@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 import geopandas as gpd
 from shapely.geometry import box, shape
 
-from . import config, s3io
+from . import config, io
 from . import cog
 
 INDEX_CRS = "EPSG:4326"
@@ -38,10 +38,10 @@ def index_uri(asset: str, year: int | None = None) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# GeoParquet I/O (gpd reads s3:// directly; writes stage through s3io)
+# GeoParquet I/O (gpd reads s3:// directly; writes stage through io)
 # --------------------------------------------------------------------------------------
 def _write_parquet(gdf: gpd.GeoDataFrame, uri: str) -> None:
-    with s3io.staged_local_path(uri) as path:
+    with io.staged_local_path(uri) as path:
         gdf.to_parquet(path)
 
 
@@ -74,7 +74,7 @@ def build_index(asset: str, footprints, year: int | None = None) -> str:
 def _asset_cogs(asset: str, year: int | None) -> list[str]:
     """Staged COG URIs for ``asset``: every ``.tif`` under its prefix (recursive), filtered to the
     year — annual assets embed the year in the COG path, single-epoch assets take all."""
-    uris = s3io.list_uris(config.staged_uri(asset) + "/")
+    uris = io.list_uris(config.staged_uri(asset) + "/")
     return [u for u in uris if u.endswith(".tif") and (year is None or str(year) in u)]
 
 
@@ -97,7 +97,7 @@ def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | No
 
     All assets — including resolve from their GeoParquet index."""
     uri = index_uri(asset, year)
-    if not s3io.exists(uri):
+    if not io.exists(uri):
         return []
     gdf = gpd.read_parquet(uri)
     query = box(*bounds)
@@ -113,6 +113,6 @@ def read_index(asset: str, year: int | None = None) -> gpd.GeoDataFrame | None:
     against thousands of chunks without re-reading the parquet each time.
     """
     uri = index_uri(asset, year)
-    if not s3io.exists(uri):
+    if not io.exists(uri):
         return None
     return gpd.read_parquet(uri)

@@ -14,7 +14,7 @@ Two cases, both producing a Cloud-Optimized GeoTIFF via GDAL's native ``COG`` dr
 
 Both writers just produce the COG; the footprint index is rebuilt from the written COGs' headers
 afterwards (:func:`bii.tile_index.index_cogs`). Destination handling (local path vs ``s3://``)
-lives in :mod:`bii.s3io`.
+lives in :mod:`bii.io`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import rasterio.shutil
 import requests
 from rasterio.warp import transform_bounds
 
-from . import config, s3io
+from . import config, io
 
 # GDAL options for reading sources during staging: caches off so a Batch worker's memory stays
 # bounded; retry transient HTTP failures. Also reused by bii.process for the compute reads.
@@ -83,7 +83,7 @@ def translate_to_cog(
     local = fetch(src, headers) if src.startswith(("http://", "https://")) else src
     try:
         path = f"/vsigzip/{local}" if local.endswith(".gz") else local
-        with rio.Env(**GDAL_READ_ENV), rio.open(path) as s, s3io.staged_local_path(dst) as out:
+        with rio.Env(**GDAL_READ_ENV), rio.open(path) as s, io.staged_local_path(dst) as out:
             # Predictor decorrelates neighbouring samples before ZSTD: 3 (floating-point) for
             # float bands, 2 (horizontal) for ints. Predictor 2 on raw float bytes can *inflate*
             # the output, so the COG driver's dtype-blind ``YES`` is not safe here.

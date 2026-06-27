@@ -7,7 +7,7 @@ chunks that failed. Mirrors :mod:`bii.stage` (driver + worker in one module):
 
 * **worker** — :func:`process` rebuilds a :class:`cog_worker.Worker` from a ``chunk_params`` dict,
   runs :func:`bii.model.compute_all`, and writes each ``bii_<year>`` layer to the deterministic
-  key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` via :func:`bii.s3io.staged_local_path`.
+  key ``<out>/<run_id>/<layer>/<layer>_<north>_<west>.tif`` via :func:`bii.io.staged_local_path`.
   It always overwrites — the skip-if-exists decision lives in :func:`run`.
 * **driver** — :func:`run` drops non-finite and ocean chunks, skips chunks already fully written
   (unless ``overwrite``, mirroring ``stage._pending``), fans the rest out, and reports the failed
@@ -26,7 +26,7 @@ import rasterio as rio
 from cog_worker import Manager, Worker
 from shapely.geometry import box
 
-from . import config, model, orchestration, s3io, tile_index
+from . import config, model, orchestration, io, tile_index
 from . import cog
 
 # A chunk overlapping no staged landcover footprint can only produce nodata (landcover is the
@@ -69,7 +69,7 @@ def process(chunk: dict | None = None, run_id: str | None = None) -> None:
     is what skips chunks already written). As the ``bii-process`` container entrypoint, reads its chunk
     from the manifest (``BII_MANIFEST`` + array index) when called with no argument.
 
-    Each layer is written straight to its destination via :func:`bii.s3io.staged_local_path` — the COG
+    Each layer is written straight to its destination via :func:`bii.io.staged_local_path` — the COG
     driver builds overviews on a local temp file regardless, so an in-memory file buys nothing.
     ``worker.write`` clips the buffer, carries the nodata mask, and keeps the array's float32 dtype.
     """
@@ -80,7 +80,7 @@ def process(chunk: dict | None = None, run_id: str | None = None) -> None:
     # memory stays bounded, retries on transient HTTP failures.
     with rio.Env(**cog.GDAL_READ_ENV):
         for key, arr in model.compute_all(worker):
-            with s3io.staged_local_path(output_uri(run_id, key, worker)) as out:
+            with io.staged_local_path(output_uri(run_id, key, worker)) as out:
                 worker.write(arr, out, driver="COG", overview_resampling="average")
 
 
@@ -132,7 +132,7 @@ def chunk_manifest(
 def _pending(chunks: list[dict], run_id: str) -> list[dict]:
     """Chunks missing at least one output layer (skip-if-exists; mirrors ``stage._pending``). Lists
     the output prefix once, then checks membership in-memory."""
-    present = set(s3io.list_uris(config.out_uri(run_id)))
+    present = set(io.list_uris(config.out_uri(run_id)))
     layers = output_layers()
     pending = []
     for c in chunks:
