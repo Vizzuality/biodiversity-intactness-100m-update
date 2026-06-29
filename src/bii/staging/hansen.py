@@ -1,11 +1,15 @@
 """Stage Hansen Global Forest Change ``lossyear`` -> forestLoss COGs (one job per 10deg tile).
 
-``lossyear`` encodes year of loss (1-24 = 2001-2024, 0 = no loss): categorical, so overviews use
-``nearest`` and 0 is real data not nodata. Ocean tiles 404.
+``lossyear`` encodes year of loss (1-24 = 2001-2024, 0 = no loss). We flag 0 as nodata so ``mode``
+overviews skip no-loss pixels: any loss in a cell survives (overview > 0) keeping a real loss year,
+matching the v1 forest-loss layer the model coefficients were fit against. Ocean tiles 404.
 """
 
 from __future__ import annotations
 
+import os
+
+import rasterio as rio
 import requests
 
 from .. import config
@@ -48,9 +52,15 @@ def stage_unit(unit: dict) -> bool:
     """Stage one Hansen 10deg tile. A 404 is a valid ocean tile -> skip (``False``)."""
     dst = _dst(unit["lat"], unit["lon"])
     try:
-        cog.translate_to_cog(unit["url"], dst, resampling="nearest")
+        local = cog.fetch(unit["url"])
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
             return False
         raise
+    try:
+        with rio.open(local, "r+") as s:
+            s.nodata = 0
+        cog.translate_to_cog(local, dst, resampling="mode")
+    finally:
+        os.path.exists(local) and os.remove(local)
     return True

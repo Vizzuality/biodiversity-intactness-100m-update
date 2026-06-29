@@ -84,6 +84,18 @@ def fast_distance_transform(arr):
     return edt.edtsq(np.logical_not(arr))[np.newaxis]
 
 
+def close_landcover_seams(lc):
+    """Fill 1px nodata seams where overlapping IO MGRS tiles meet (a reprojection artifact at the
+    slanted UTM tile edges, not real nodata) with the nearest valid land class via a morphological
+    close. Genuine water/nodata regions are wider than the kernel and stay masked."""
+    data = lc.data[0]
+    valid = ((data > 1) & ~np.ma.getmaskarray(lc)[0]).astype(np.uint8)
+    k = np.ones((3, 3), np.uint8)
+    seam = cv2.morphologyEx(valid, cv2.MORPH_CLOSE, k).astype(bool) & ~valid.astype(bool)
+    filled = np.where(seam, cv2.dilate(np.where(valid.astype(bool), data, 0), k), data)
+    return np.ma.MaskedArray(filled[np.newaxis], (np.ma.getmaskarray(lc)[0] & ~seam)[np.newaxis])
+
+
 def expand_valid(arr, px):
     """Grow a masked array's valid-data zone by ``px`` pixels, filling new cells with a neighboring
     valid value (grayscale dilation)."""
@@ -109,7 +121,9 @@ def read_static_assets(worker) -> dict:
 
 
 def read_annual_assets(worker, year: int) -> dict:
-    return {a: _read(worker, a, year) for a in ANNUAL_ASSETS}
+    layers = {a: _read(worker, a, year) for a in ANNUAL_ASSETS}
+    layers["landcover"] = close_landcover_seams(layers["landcover"])
+    return layers
 
 
 def _static_predictors(layers: dict, scale: float) -> Iterator[tuple[str, object]]:
@@ -162,8 +176,8 @@ def _fold(predictors, abundance, community_similarity, computed=None):
 def _finalize(abundance, community_similarity, layers: dict, computed: dict | None = None) -> dict:
     """Inverse-link and normalize the linear sums into abundance/community_similarity/bii, masked to
     valid landcover (landcover > 1). With ``computed``, also merges in inputs and per-predictor arrays."""
-    abundance = INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](abundance) / ABUNDANCE_MAX
-    community_similarity = INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](community_similarity) / COMMUNITY_SIMILARITY_MAX
+    abundance = np.clip(INVERSE_TRANSFORMS[ABUNDANCE_TRANSFORM](abundance) / ABUNDANCE_MAX, 0, 1)
+    community_similarity = np.clip(INVERSE_TRANSFORMS[COMMUNITY_SIMILARITY_TRANSFORM](community_similarity) / COMMUNITY_SIMILARITY_MAX, 0, 1)
     bii = abundance * community_similarity
 
     nodata = ~(layers["landcover"].data > 1)
