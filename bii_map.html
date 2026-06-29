@@ -13,7 +13,11 @@
 </style>
 <div id="map"></div>
 <div id="panel">
-  <strong>BII v1.1</strong>
+  <strong>Biodiversity Intactness</strong>
+  <label>Source <select id="source">
+    <option value="ours">BII v1.1</option>
+    <option value="pc">Planetary Computer</option>
+  </select></label>
   <label>Year <select id="year"></select></label>
   <label>Colormap <select id="cmap"></select></label>
 </div>
@@ -34,8 +38,24 @@ const BUCKET = "https://vizz-bii.s3.amazonaws.com/out/v1_1";
 const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024];
 const COLORMAP_PNG = "https://cdn.jsdelivr.net/npm/@developmentseed/deck.gl-raster@0.8.0-beta.2/dist/gpu-modules/colormaps.png";
 
+// Planetary Computer io-biodiversity (Impact Observatory), the same render the PC explorer uses.
+const PC = "https://planetarycomputer.microsoft.com/api/data/v1";
+const PC_RENDER = "colormap_name=io-bii&expression=0.97*(data_b1**3.84)&rescale=0,1&collection=io-biodiversity&format=png";
+const IOBII_PNG = `${PC}/legend/colormap/io-bii`;
+// searchids are deterministic hashes of the per-year io-biodiversity mosaic search, registered
+// once offline. Templating them keeps the page to plain image-tile GETs (a client-side register
+// POST is a cross-origin fetch that the browser blocks; tile requests are not CORS-restricted).
+const PC_SEARCH = {
+  2017: "4f4c8ad5d551193def120f34a5675be8",
+  2018: "3e61dee983f5ca5c0e3e3516a592939c",
+  2019: "f4df7d41a0c2048d877e70488498aee9",
+  2020: "4a12007f392843076344d27c952b1060",
+};
+const PC_YEARS = Object.keys(PC_SEARCH).map(Number);
+
 let year = 2020;
-let cmap = COLORMAP_INDEX.rdylgn;
+let cmap;
+let source = "ours";
 
 // quadkey -> [minLon, minLat, maxLon, maxLat]
 function quadkeyBbox(qk) {
@@ -73,8 +93,31 @@ function getTiff(url, opts) {
   return p;
 }
 
+// Bake the PC render expression into a 256-entry colormap row so our COGs match the
+// Planetary Computer tiles: colour(x) = io-bii(0.97 * x ** 3.84). Appended as the sprite's
+// last layer (createColormapTexture requires a 256-wide sprite, one row per colormap).
+function ioBiiRow(img) {
+  const w = img.width, src = img.data, row = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const v = Math.min(1, 0.97 * (i / 255) ** 3.84);
+    const c = Math.min(w - 1, Math.round(v * (w - 1)));
+    row.set(src.subarray(c * 4, c * 4 + 4), i * 4);
+  }
+  return row;
+}
+
+let IOBII = 0;
 let colormapTexture;
-let colormapImage = fetch(COLORMAP_PNG).then(r => r.arrayBuffer()).then(decodeColormapSprite);
+const colormapImage = Promise.all([
+  fetch(COLORMAP_PNG).then(r => r.arrayBuffer()).then(decodeColormapSprite),
+  fetch(IOBII_PNG).then(r => r.arrayBuffer()).then(decodeColormapSprite),
+]).then(([sprite, io]) => {
+  IOBII = sprite.height;
+  const data = new Uint8ClampedArray(256 * 4 * (sprite.height + 1));
+  data.set(sprite.data, 0);
+  data.set(ioBiiRow(io), 256 * 4 * sprite.height);
+  return new ImageData(data, 256, sprite.height + 1);
+});
 
 async function getTileData(image, { device, x, y, signal, pool }) {
   const { array } = await image.fetchTile(x, y, { boundless: false, signal, pool });
@@ -125,20 +168,46 @@ const map = new maplibregl.Map({
 const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
 map.addControl(overlay);
 
-let sourcesByYear = new Map();
-async function refresh() {
-  if (!sourcesByYear.has(year)) sourcesByYear.set(year, await loadSources(year));
-  overlay.setProps({ layers: [buildLayer(sourcesByYear.get(year))] });
+function pcTiles(yr) {
+  return `${PC}/mosaic/${PC_SEARCH[yr]}/tiles/WebMercatorQuad/{z}/{x}/{y}@2x?${PC_RENDER}`;
 }
 
-const yearSel = document.getElementById("year");
-for (const y of YEARS) yearSel.add(new Option(y, y, y === year, y === year));
-yearSel.onchange = e => { year = +e.target.value; refresh(); };
+const sourcesByYear = new Map();
+async function refresh() {
+  if (map.getLayer("pc")) map.removeLayer("pc");
+  if (map.getSource("pc")) map.removeSource("pc");
+  if (source === "pc") {
+    overlay.setProps({ layers: [] });
+    map.addSource("pc", { type: "raster", tiles: [pcTiles(year)], tileSize: 512, minzoom: 2,
+      attribution: "Biodiversity Intactness © Impact Observatory, via Microsoft Planetary Computer" });
+    map.addLayer({ id: "pc", type: "raster", source: "pc" });
+  } else {
+    if (!sourcesByYear.has(year)) sourcesByYear.set(year, await loadSources(year));
+    overlay.setProps({ layers: [buildLayer(sourcesByYear.get(year))] });
+  }
+}
 
+const sourceSel = document.getElementById("source");
+const yearSel = document.getElementById("year");
 const cmapSel = document.getElementById("cmap");
-for (const name of ["rdylgn", "viridis", "greens", "ylgn", "spectral", "turbo"])
-  cmapSel.add(new Option(name, COLORMAP_INDEX[name], name === "rdylgn", name === "rdylgn"));
+
+function fillYears() {
+  const list = source === "pc" ? PC_YEARS : YEARS;
+  if (!list.includes(year)) year = list[list.length - 1];
+  yearSel.replaceChildren();
+  for (const y of list) yearSel.add(new Option(y, y, y === year, y === year));
+}
+
+sourceSel.onchange = e => { source = e.target.value; cmapSel.disabled = source === "pc"; fillYears(); refresh(); };
+yearSel.onchange = e => { year = +e.target.value; refresh(); };
 cmapSel.onchange = e => { cmap = +e.target.value; refresh(); };
 
-map.on("load", refresh);
+map.on("load", async () => {
+  await colormapImage;  // IOBII (io-bii layer index) is known once the sprite is combined
+  cmap = IOBII;
+  for (const name of ["io-bii", "rdylgn", "viridis", "greens", "ylgn", "spectral", "turbo"])
+    cmapSel.add(new Option(name, name === "io-bii" ? IOBII : COLORMAP_INDEX[name], name === "io-bii", name === "io-bii"));
+  fillYears();
+  refresh();
+});
 </script>
