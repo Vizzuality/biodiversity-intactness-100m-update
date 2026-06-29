@@ -26,7 +26,7 @@ process = [
     "rio-tiler",
 ]
 dev = [
-    "jupyter",
+    "ipykernel",  # VSCode notebook kernel; avoids the full jupyter server/lab stack
     "matplotlib",
     "pytest",
     "rio-cogeo",  # cog_validate, used only by the test suite
