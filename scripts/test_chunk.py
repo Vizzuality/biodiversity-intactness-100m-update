@@ -22,10 +22,11 @@ CHUNKSIZE = 4096
 
 
 def main(argv=None) -> dict:
-    p = argparse.ArgumentParser(description="Run ONE BII chunk in local docker (pre-fan-out gate).")
+    p = argparse.ArgumentParser(description="Run ONE BII chunk in local docker.")
     p.add_argument("--bounds", type=float, nargs=4, metavar=("W", "S", "E", "N"),
                    default=[-5.0, 39.0, -1.32, 42.68],
                    help="analysis extent in EPSG:4326 (default: ~4096px central Spain)")
+    p.add_argument("--chunksize", type=int, default=CHUNKSIZE, help="chunk size in pixels (default: 4096)")
     p.add_argument("--year", type=int, default=2020, help="year to process")
     p.add_argument("--out", default="./data/staged_local",
                    help="local output dir / out-root (bind-mounted into the container)")
@@ -41,7 +42,7 @@ def main(argv=None) -> dict:
         config.STAGED_ROOT = store
 
     manager = Manager(bounds=tuple(args.bounds), scale=config.SCALE_DEG, proj=config.PROJ, buffer=config.BUFFER)
-    params = list(manager.chunk_params(CHUNKSIZE))
+    params = list(manager.chunk_params(args.chunksize))
     chunk = dict(params[0], proj_bounds=list(params[0]["proj_bounds"]))
     worker = Worker(**chunk)
     print(f"chunk: bounds={tuple(worker.bounds)} size={worker.width}x{worker.height}", file=sys.stderr)

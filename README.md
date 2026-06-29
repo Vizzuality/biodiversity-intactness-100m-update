@@ -49,6 +49,12 @@ python scripts/run.py --bounds -86 9 -84 11 --executor batch   # a region
 python scripts/run.py --executor batch                         # global
 ```
 
+## Outputs
+
+ - **BII layers:** per-year COGs at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_<north>_<west>.tif` (`run_id` default `v1_1`); public read over HTTP at `https://vizz-bii.s3.amazonaws.com/out/<run_id>/...`.
+ - **Mosaic index:** per-year MosaicJSON (quadkey → overlapping COG URIs) at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_mosaic.json` (same public HTTP), consumed by `bii_map.html`.
+ - **Input footprint indexes:** per-asset GeoParquet (`{geometry, uri}`) at `s3://vizz-bii-processing/input_cogs/<asset>/[<year>/]<asset>_index.parquet`; landcover is indexed in place against the IO STAC.
+
 ## Notebooks
  - `1. visualize-local.ipynb`: after `test_stage_local.py`, inspect and preview bii.
  - `2. verify-source-coverage.ipynb`: after `stage.py`, inspect cogs correctly generated.
