@@ -10,6 +10,13 @@
   }
   #panel select { margin-left: 6px; }
   #panel label { display: block; margin: 4px 0; }
+  #timeline { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+  #timeline input { flex: 1; }
+  #play { width: 26px; cursor: pointer; }
+  #yearlbl { width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+  #legend { margin-top: 8px; }
+  #legendbar { display: block; width: 200px; height: 12px; border-radius: 2px; }
+  #legendticks { display: flex; justify-content: space-between; width: 200px; opacity: .8; margin-top: 2px; }
 </style>
 <div id="map"></div>
 <div id="panel">
@@ -18,8 +25,15 @@
     <option value="ours">BII v1.1</option>
     <option value="pc">Planetary Computer</option>
   </select></label>
-  <label>Year <select id="year"></select></label>
-  <label>Colormap <select id="cmap"></select></label>
+  <div id="timeline">
+    <button id="play">▶</button>
+    <input id="year" type="range" />
+    <span id="yearlbl"></span>
+  </div>
+  <div id="legend">
+    <canvas id="legendbar"></canvas>
+    <div id="legendticks"><span>0</span><span>0.5</span><span>1</span></div>
+  </div>
 </div>
 <script type="module">
 import maplibregl from "https://esm.sh/maplibre-gl@5";
@@ -27,7 +41,7 @@ import maplibregl from "https://esm.sh/maplibre-gl@5";
 const DEPS = "deps=@deck.gl/core@9.3.2,@deck.gl/layers@9.3.2,@deck.gl/geo-layers@9.3.2,@deck.gl/mesh-layers@9.3.2,@luma.gl/core@9.3.2,@luma.gl/engine@9.3.2,@luma.gl/shadertools@9.3.2";
 const { MapboxOverlay } = await import(`https://esm.sh/@deck.gl/mapbox@9.3.2?${DEPS}`);
 const { MosaicLayer, COGLayer } = await import(`https://esm.sh/@developmentseed/deck.gl-geotiff@0.8.0-beta.2?${DEPS}`);
-const { CreateTexture, Colormap, MaskTexture, createColormapTexture, decodeColormapSprite, COLORMAP_INDEX } =
+const { CreateTexture, Colormap, MaskTexture, createColormapTexture, decodeColormapSprite } =
   await import(`https://esm.sh/@developmentseed/deck.gl-raster@0.8.0-beta.2/gpu-modules?${DEPS}`);
 const { GeoTIFF, DecoderPool } = await import("https://esm.sh/@developmentseed/geotiff@0.8.0-beta.2");
 
@@ -54,7 +68,6 @@ const PC_SEARCH = {
 const PC_YEARS = Object.keys(PC_SEARCH).map(Number);
 
 let year = 2020;
-let cmap;
 let source = "ours";
 
 // quadkey -> [minLon, minLat, maxLon, maxLat]
@@ -108,14 +121,16 @@ function ioBiiRow(img) {
 
 let IOBII = 0;
 let colormapTexture;
+let legendRow;  // baked io-bii row (256 RGBA), value 0..1 -> displayed colour
 const colormapImage = Promise.all([
   fetch(COLORMAP_PNG).then(r => r.arrayBuffer()).then(decodeColormapSprite),
   fetch(IOBII_PNG).then(r => r.arrayBuffer()).then(decodeColormapSprite),
 ]).then(([sprite, io]) => {
   IOBII = sprite.height;
+  legendRow = ioBiiRow(io);
   const data = new Uint8ClampedArray(256 * 4 * (sprite.height + 1));
   data.set(sprite.data, 0);
-  data.set(ioBiiRow(io), 256 * 4 * sprite.height);
+  data.set(legendRow, 256 * 4 * sprite.height);
   return new ImageData(data, 256, sprite.height + 1);
 });
 
@@ -132,15 +147,16 @@ async function getTileData(image, { device, x, y, signal, pool }) {
 function renderTile(d) {
   const renderPipeline = [
     { module: CreateTexture, props: { textureName: d.texture } },
-    { module: Colormap, props: { colormapTexture, colormapIndex: cmap } },
+    { module: Colormap, props: { colormapTexture, colormapIndex: IOBII } },
   ];
   if (d.mask) renderPipeline.push({ module: MaskTexture, props: { maskTexture: d.mask } });
   return { renderPipeline };
 }
 
-function buildLayer(sources) {
+function buildLayer(yr, sources, visible) {
   return new MosaicLayer({
-    id: `bii-${year}-${cmap}`,
+    id: `bii-${yr}`,
+    visible,
     sources,
     minZoom: 3,
     maxRequests: 12,
@@ -148,7 +164,7 @@ function buildLayer(sources) {
     getSource: (s, o) => getTiff(s.url, { signal: o.signal, concurrencyLimiter: o.concurrencyLimiter }),
     renderSource: (s, { data, signal }) =>
       new COGLayer({
-        id: `cog-${s.url}`,
+        id: `cog-${yr}-${s.url}`,
         geotiff: data,
         pool,
         getTileData,
@@ -172,41 +188,69 @@ function pcTiles(yr) {
   return `${PC}/mosaic/${PC_SEARCH[yr]}/tiles/WebMercatorQuad/{z}/{x}/{y}@2x?${PC_RENDER}`;
 }
 
+// Layers are kept loaded once built and toggled by visibility so swapping back is instant.
 const sourcesByYear = new Map();
+const pcYears = new Set();    // PC raster layers added, one per year
+const builtYears = new Set(); // deck mosaics added to the overlay, one per year
 async function refresh() {
-  if (map.getLayer("pc")) map.removeLayer("pc");
-  if (map.getSource("pc")) map.removeSource("pc");
-  if (source === "pc") {
-    overlay.setProps({ layers: [] });
-    map.addSource("pc", { type: "raster", tiles: [pcTiles(year)], tileSize: 512, minzoom: 2,
+  if (source === "pc" && !pcYears.has(year)) {
+    pcYears.add(year);
+    map.addSource(`pc-${year}`, { type: "raster", tiles: [pcTiles(year)], tileSize: 512, minzoom: 2,
       attribution: "Biodiversity Intactness © Impact Observatory, via Microsoft Planetary Computer" });
-    map.addLayer({ id: "pc", type: "raster", source: "pc" });
-  } else {
-    if (!sourcesByYear.has(year)) sourcesByYear.set(year, await loadSources(year));
-    overlay.setProps({ layers: [buildLayer(sourcesByYear.get(year))] });
+    map.addLayer({ id: `pc-${year}`, type: "raster", source: `pc-${year}` });
   }
+  for (const y of pcYears)
+    map.setLayoutProperty(`pc-${y}`, "visibility", source === "pc" && y === year ? "visible" : "none");
+
+  if (source === "ours") {
+    if (!sourcesByYear.has(year)) sourcesByYear.set(year, await loadSources(year));
+    builtYears.add(year);
+  }
+  const active = source === "ours" ? year : null;
+  overlay.setProps({ layers: [...builtYears].map(yr =>
+    buildLayer(yr, sourcesByYear.get(yr), yr === active)) });
 }
 
 const sourceSel = document.getElementById("source");
 const yearSel = document.getElementById("year");
-const cmapSel = document.getElementById("cmap");
+const yearLbl = document.getElementById("yearlbl");
+const playBtn = document.getElementById("play");
 
+let years = YEARS;
 function fillYears() {
-  const list = source === "pc" ? PC_YEARS : YEARS;
-  if (!list.includes(year)) year = list[list.length - 1];
-  yearSel.replaceChildren();
-  for (const y of list) yearSel.add(new Option(y, y, y === year, y === year));
+  years = source === "pc" ? PC_YEARS : YEARS;
+  if (!years.includes(year)) year = years[years.length - 1];
+  yearSel.min = 0; yearSel.max = years.length - 1; yearSel.step = 1;
+  yearSel.value = years.indexOf(year);
+  yearLbl.textContent = year;
 }
 
-sourceSel.onchange = e => { source = e.target.value; cmapSel.disabled = source === "pc"; fillYears(); refresh(); };
-yearSel.onchange = e => { year = +e.target.value; refresh(); };
-cmapSel.onchange = e => { cmap = +e.target.value; refresh(); };
+function setYear(i) {
+  year = years[i];
+  yearSel.value = i;
+  yearLbl.textContent = year;
+  refresh();
+}
+
+let timer = null;
+playBtn.onclick = () => {
+  if (timer) { clearInterval(timer); timer = null; playBtn.textContent = "▶"; return; }
+  playBtn.textContent = "⏸";
+  timer = setInterval(() => setYear((years.indexOf(year) + 1) % years.length), 1200);
+};
+
+sourceSel.onchange = e => { source = e.target.value; fillYears(); refresh(); };
+yearSel.oninput = e => setYear(+e.target.value);
+
+function drawLegend() {
+  const cv = document.getElementById("legendbar");
+  cv.width = 256; cv.height = 1;
+  cv.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(legendRow), 256, 1), 0, 0);
+}
 
 map.on("load", async () => {
   await colormapImage;  // IOBII (io-bii layer index) is known once the sprite is combined
-  cmap = IOBII;
-  for (const name of ["io-bii", "rdylgn", "viridis", "greens", "ylgn", "spectral", "turbo"])
-    cmapSel.add(new Option(name, name === "io-bii" ? IOBII : COLORMAP_INDEX[name], name === "io-bii", name === "io-bii"));
+  drawLegend();
   fillYears();
   refresh();
 });
