@@ -18,6 +18,9 @@ wheels/
 # docs
 docs/
 
+# vscode
+.vscode/
+
 # macos
 .DS_Store
 
