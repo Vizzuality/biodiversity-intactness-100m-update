@@ -31,6 +31,11 @@ dev = [
     "pytest",
     "rio-cogeo",  # cog_validate, used only by the test suite
 ]
+# Host-side post-processing: per-year MosaicJSONs + STAC GeoParquet over the out folder.
+catalog = [
+    "cogeo-mosaic",
+    "stac-geoparquet",
+]
 
 # Container worker entrypoints (the docker/Batch commands). The orchestrator CLIs live in scripts/.
 [project.scripts]
