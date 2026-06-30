@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """Single-chunk local docker test
 
-Runs ``bii-process`` on one chunk in the production image. ``--remote`` reads inputs from S3 but still writes outputs to ``--out``, so it
-needs only read S3 creds.
+Runs ``bii-process`` on one chunk in the production image. ``--remote`` reads inputs from S3 but still writes outputs to ``--out``.
 
     python scripts/test_chunk.py                          # central Spain, 2020, ./data/staged_local
     python scripts/test_chunk.py --remote                 # read staged inputs from S3, write local

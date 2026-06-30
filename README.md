@@ -17,7 +17,7 @@ database of >32,000 site observations ([Hudson et al. 2016](https://doi.org/10.5
 against global spatial proxies for human pressure. Biodiversity Intactness is computed per ~100 m pixel (EPSG:4326) as 
 `bii = abundance * community_similarity`.
 
-| input | dataset (version used) | citation | per-year | updated since whitepaper |
+| input | dataset | citation | per-year | updated |
 |---|---|---|---|---|
 | land cover | [Sentinel-2 10 m Land Use/Land Cover Time Series, 9-class](https://registry.opendata.aws/io-lulc/) (2017–2024) | Karra et al. 2021 | yes | yes (io-lulc-9-class → io-10m-annual-lulc) |
 | forest loss | [Global Forest Change, v1.12](https://glad.umd.edu/dataset/global-forest-change) (2000–2024) | Hansen et al. 2013 | yes| yes (v1.9 → v1.12) |
@@ -25,14 +25,16 @@ against global spatial proxies for human pressure. Biodiversity Intactness is co
 | population | [WorldPop Global Population, constrained 100 m, R2025A](https://hub.worldpop.org/geodata/listing?id=135) (2015–2030) | WorldPop et al. 2018 | yes | yes (Global_2000_2020 → R2025A) |
 | nightlights | [VIIRS Nighttime Lights (VNL), v2.1 / v2.2 annual median composites](https://eogdata.mines.edu/products/vnl/) (2017–2024) | Elvidge et al. 2021 | yes | yes (v2.0 → v2.1/v2.2) |
 | accessibility | [Global Map of Travel Time to Cities](https://malariaatlas.org/project-resources/accessibility-to-healthcare/) (2015) | Weiss et al. 2018 | no | no |
-| roads | [OpenStreetMap](https://www.openstreetmap.org/) (distance to roads) | OpenStreetMap contributors | no | yes (2026-06-25 snapshot) |
+| roads | [OpenStreetMap](https://www.openstreetmap.org/) (2026-06-25) | OpenStreetMap contributors | no | yes (current snapshot) |
 
 v1.1 results closely match values for the original timeseries with minor differences due to updated source datasets. 
 Most notably, this version uses WorldPop's constrained estimates, while the original used unconstrained population estimates
 due to data availability.
 
 ## Run
-Computation is set up to run on AWS Batch.
+Computation is set up to run on AWS Batch. All input sources are first converted to COGs,
+then processing dynamically resamples data to compute final output. This allows previewing
+of subsets or reduced resolution sampels prior to the final run.
 
 ```sh
 uv sync --extra dev
@@ -42,7 +44,9 @@ Bring up infra and deploy the image: see `infra/README.md` and `scripts/deploy.s
 read AWS credentials and `BII_BATCH_*` pointers from a `.env`. See `.sample.env`.
 
 ```sh
-# downlead and convert source data to cogs in local data dir with docker 
+# build local docker image
+docker build . -t bii
+# downlead and convert source data to cogs for small area in local data dir with docker 
 # (will subset when possible but also process some large global files)
 python scripts/test_stage_local.py --bounds -86 9 -84 11 --year 2020  
 # end-to-end test one chunk in local docker

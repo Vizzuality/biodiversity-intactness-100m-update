@@ -4,7 +4,7 @@ Greenfield stack for running BII staging + processing on AWS Batch (EC2 Spot)
 
 State is local (`terraform.tfstate` in this dir, gitignored).
 
-## Bring-up (chicken-and-egg: repos exist before images)
+## Setup
 
 ```sh
 cd infra
@@ -22,18 +22,14 @@ tofu output    # batch_job_queue -> BII_BATCH_QUEUE, batch_job_def -> BII_BATCH_
                # batch_stage_job_def -> BII_BATCH_STAGE_JOB_DEF
 ```
 
-`tofu apply` with no `-var` leaves the job defs on `:latest` — fine for a first run, but pinning the
-digest is what guarantees local `docker` and Batch run the same image.
-
 ## Redeploy
 
 `./scripts/deploy.sh` — builds + pushes the current HEAD image and pins its digest into the job defs.
 
-## Running locally
+## Running
 
 `tofu output local_role_arn` is a least-privilege role (read/write the two buckets + submit/monitor
-Batch jobs) that you assume from your own AWS identity. By default any
-principal in the account that you grant `sts:AssumeRole` can assume it.
+Batch jobs) that you assume from your own AWS identity.
 
 Add a profile to `~/.aws/config` that assumes it from your normal credentials:
 

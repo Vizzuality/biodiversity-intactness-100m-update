@@ -8,22 +8,17 @@ from __future__ import annotations
 
 import os
 
-# Outputs + manifests (kept forever); regenerable staged inputs/index (auto-deleted) live separately.
 BUCKET = "vizz-bii"
 PROCESSING_BUCKET = "vizz-bii-processing"
 
+# Where to save pre-process COGs
 STAGED_PREFIX = "input_cogs"
-OUT_PREFIX = "out"
-
-
-# Set ``BII_STAGED_ROOT`` / ``BII_OUT_ROOT`` to a local dir to run on local disk; env so a
-# docker/Batch container picks up the same root the host built the manifest with.
 STAGED_ROOT = os.environ.get("BII_STAGED_ROOT", f"s3://{PROCESSING_BUCKET}/{STAGED_PREFIX}")
+
+# Where to save final outputs (per-run subdirs)
+OUT_PREFIX = "out"
 OUT_ROOT = os.environ.get("BII_OUT_ROOT", f"s3://{BUCKET}/{OUT_PREFIX}")
-
-# Sub-prefix under the output root segregating one run's COGs (``out/<run_id>/...``) and manifest.
 RUN_ID = os.environ.get("BII_RUN_ID", "v1_1")
-
 
 def _join(root: str, parts: tuple[str, ...]) -> str:
     key = "/".join(str(p).strip("/") for p in parts if p is not None and p != "")
