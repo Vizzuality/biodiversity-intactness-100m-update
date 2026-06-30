@@ -164,7 +164,7 @@ Ports `_cog_worker_run` track/retry to Batch; reused for both staging and proces
 ## Dockerfile
 
 - **`Dockerfile`** — GDAL/rasterio base (`osgeo/gdal`) + `apt install osmctools` (for the roads
-  highway filter) + `uv pip install .[process]`. One image for processing jobs, the local test,
+  highway filter) + `uv pip install .`. One image for processing jobs, the local test,
   and all staging (Hansen, WorldPop, VNL, travel time, FML, SDPT, roads). osmctools is ~1 MB on
   top of the geo base, so a single image is cheaper than maintaining a separate roads image.
 

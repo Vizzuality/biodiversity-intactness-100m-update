@@ -12,29 +12,23 @@ dependencies = [
     "pyarrow",
     "shapely",
     "pystac-client",
-    "planetary-computer",
     "boto3",
-    "s3fs>=2024",
-]
-
-[project.optional-dependencies]
-# Processing/model deps (parts 3-4). Kept optional so the staging image stays lean.
-process = [
+    "fsspec[s3]",
     "cog_worker",
     "edt",
     "opencv-python-headless",
-    "rio-tiler",
 ]
+
+[project.optional-dependencies]
+# Notebooks, test suite, and host-side utility scripts (catalog generation).
 dev = [
     "ipykernel",  # VSCode notebook kernel; avoids the full jupyter server/lab stack
     "matplotlib",
+    "planetary-computer",  # signs Planetary Computer assets in the visualize notebooks
     "pytest",
     "rio-cogeo",  # cog_validate, used only by the test suite
-]
-# Host-side post-processing: per-year MosaicJSONs + STAC GeoParquet over the out folder.
-catalog = [
-    "cogeo-mosaic",
-    "stac-geoparquet",
+    "cogeo-mosaic",  # catalog generation
+    "stac-geoparquet",  # catalog generation
 ]
 
 # Container worker entrypoints (the docker/Batch commands). The orchestrator CLIs live in scripts/.
@@ -49,7 +43,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bii"]
-# Ship the vendored Geofabrik leaf-region manifest used by staging/roads.py.
 artifacts = ["src/bii/staging/data/*.geojson"]
 
 [tool.pytest.ini_options]

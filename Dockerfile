@@ -10,6 +10,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src
-RUN uv pip install --system --break-system-packages --no-cache '.[process]'
+RUN uv pip install --system --break-system-packages --no-cache .
 
 CMD ["bii-process"]

@@ -1,37 +1,49 @@
-# update_bii
+# Global 100m Projections of Biodiversity Intactness for the years 2017-2024 (v1.1)
 
-Update the global 100 m **Biodiversity Intactness Index (BII)** for 2017–2024.
+Annual global 100 m gridded maps of terrestrial Biodiversity Intactness, extended to 2017–2024.
+
+This is an update of the Biodiversity Intactness product by Impact Observatory and Vizzuality, originally
+covering 2017–2020 ([Planetary Computer dataset](https://planetarycomputer.microsoft.com/dataset/io-biodiversity),
+[technical whitepaper](https://ai4edatasetspublicassets.blob.core.windows.net/assets/pdfs/io-biodiversity/Biodiversity_Intactness_whitepaper.pdf);
+Gassert, Mazzarello & Hyde 2022). The model is unchanged from the whitepaper. This release re-runs it
+on updated input datasets refreshing and extending the timeseries to 2017-2024.
 
 ## Model
 
-BII is computed per ~100 m pixel (EPSG:4326) as `bii = abundance * community_similarity`, two
-linear predictors (PREDICTS coefficients in `src/bii/model.py`) of land cover, forest loss/management,
-population, nightlights, roads, and accessibility.
+Following [Newbold et al. (2016)](https://doi.org/10.1126/science.aaf2201) and
+[Hill et al. (2018)](https://doi.org/10.1101/311787), Biodiversity Intactness is estimated as two
+linear-mixed-effects predictors, Abundance and Compositional Similarity, fit to the PREDICTS
+database of >32,000 site observations ([Hudson et al. 2016](https://doi.org/10.5519/0066354)/[2017](https://doi.org/10.1002/ece3.2579))
+against global spatial proxies for human pressure. Biodiversity Intactness is computed per ~100 m pixel (EPSG:4326) as 
+`bii = abundance * community_similarity`.
 
-| input | source | per-year |
-|---|---|---|
-| land cover | Impact Observatory 10 m LULC (read in place from STAC) | yes |
-| forest loss | Hansen Global Forest Change | filtered per year |
-| forest management | Lesiv FML v3.2 or SDPT v2.1 (swappable) | no |
-| population | WorldPop 100 m | yes |
-| nightlights | VIIRS VNL | yes |
-| accessibility | Malaria Atlas travel time | no |
-| roads | OSM (Geofabrik) | no |
+| input | dataset (version used) | citation | per-year | updated since whitepaper |
+|---|---|---|---|---|
+| land cover | [Sentinel-2 10 m Land Use/Land Cover Time Series, 9-class](https://registry.opendata.aws/io-lulc/) (2017–2024) | Karra et al. 2021 | yes | yes (io-lulc-9-class → io-10m-annual-lulc) |
+| forest loss | [Global Forest Change, v1.12](https://glad.umd.edu/dataset/global-forest-change) (2000–2024) | Hansen et al. 2013 | yes| yes (v1.9 → v1.12) |
+| forest management | [Global Forest Management, v3.2](https://zenodo.org/records/4541513) (2015) | Lesiv et al. 2022 | no | no |
+| population | [WorldPop Global Population, constrained 100 m, R2025A](https://hub.worldpop.org/geodata/listing?id=135) (2015–2030) | WorldPop et al. 2018 | yes | yes (Global_2000_2020 → R2025A) |
+| nightlights | [VIIRS Nighttime Lights (VNL), v2.1 / v2.2 annual median composites](https://eogdata.mines.edu/products/vnl/) (2017–2024) | Elvidge et al. 2021 | yes | yes (v2.0 → v2.1/v2.2) |
+| accessibility | [Global Map of Travel Time to Cities](https://malariaatlas.org/project-resources/accessibility-to-healthcare/) (2015) | Weiss et al. 2018 | no | no |
+| roads | [OpenStreetMap](https://www.openstreetmap.org/) (distance to roads) | OpenStreetMap contributors | no | yes (2026-06-25 snapshot) |
 
+v1.1 results closely match values for the original timeseries with minor differences due to updated source datasets. 
+Most notably, this version uses WorldPop's constrained estimates, while the original used unconstrained population estimates
+due to data availability.
 
 ## Run
+Computation is set up to run on AWS Batch.
 
 ```sh
-uv sync --extra process --extra dev          # install
+uv sync --extra dev
 ```
 
 Bring up infra and deploy the image: see `infra/README.md` and `scripts/deploy.sh`. The CLIs
-read AWS credentials and `BII_BATCH_*` pointers from a gitignored `.env` (populated from
-`tofu output`).
+read AWS credentials and `BII_BATCH_*` pointers from a `.env`. See `.sample.env`.
 
 ```sh
 # downlead and convert source data to cogs in local data dir with docker 
-# (will subset when possible but some large global files)
+# (will subset when possible but also process some large global files)
 python scripts/test_stage_local.py --bounds -86 9 -84 11 --year 2020  
 # end-to-end test one chunk in local docker
 python scripts/test_chunk.py --bounds -86 9 -84 11 --year 2020
@@ -51,9 +63,9 @@ python scripts/run.py --executor batch                         # global
 
 ## Outputs
 
- - **BII layers:** per-year COGs at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_<north>_<west>.tif` (`run_id` default `v1_1`); public read over HTTP at `https://vizz-bii.s3.amazonaws.com/out/<run_id>/...`.
- - **Mosaic index:** per-year MosaicJSON (quadkey → overlapping COG URIs) at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_mosaic.json` (same public HTTP), consumed by `bii_map.html`.
- - **Input footprint indexes:** per-asset GeoParquet (`{geometry, uri}`) at `s3://vizz-bii-processing/input_cogs/<asset>/[<year>/]<asset>_index.parquet`; landcover is indexed in place against the IO STAC.
+ - **BII layers:** per-year COGs at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_<north>_<west>.tif`; public read over HTTP at `https://vizz-bii.s3.amazonaws.com/...`.
+ - **Mosaic index:** per-year MosaicJSON (quadkey → overlapping COG URIs) at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_mosaic.json`.
+ - **Input footprint indexes:** per-asset GeoParquet (`{geometry, uri}`) at `s3://vizz-bii-processing/input_cogs/<asset>/[<year>/]<asset>_index.parquet`.
 
 ## Notebooks
  - `1. visualize-local.ipynb`: after `test_stage_local.py`, inspect and preview bii.

@@ -815,6 +815,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
 ]
 
+[package.optional-dependencies]
+s3 = [
+    { name = "s3fs" },
+]
+
 [[package]]
 name = "geopandas"
 version = "1.1.2"
@@ -2617,48 +2622,44 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "cog-worker" },
+    { name = "edt" },
+    { name = "fsspec", extra = ["s3"] },
     { name = "geopandas" },
     { name = "numpy" },
-    { name = "planetary-computer" },
+    { name = "opencv-python-headless" },
     { name = "pyarrow" },
     { name = "pyogrio" },
     { name = "pystac-client" },
     { name = "rasterio" },
     { name = "requests" },
-    { name = "s3fs" },
     { name = "shapely" },
 ]
 
 [package.optional-dependencies]
-catalog = [
-    { name = "cogeo-mosaic" },
-    { name = "stac-geoparquet" },
-]
 dev = [
+    { name = "cogeo-mosaic" },
     { name = "ipykernel" },
     { name = "matplotlib" },
+    { name = "planetary-computer" },
     { name = "pytest" },
     { name = "rio-cogeo" },
-]
-process = [
-    { name = "cog-worker" },
-    { name = "edt" },
-    { name = "opencv-python-headless" },
-    { name = "rio-tiler" },
+    { name = "stac-geoparquet" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "boto3" },
-    { name = "cog-worker", marker = "extra == 'process'" },
-    { name = "cogeo-mosaic", marker = "extra == 'catalog'" },
-    { name = "edt", marker = "extra == 'process'" },
+    { name = "cog-worker" },
+    { name = "cogeo-mosaic", marker = "extra == 'dev'" },
+    { name = "edt" },
+    { name = "fsspec", extras = ["s3"] },
     { name = "geopandas" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "matplotlib", marker = "extra == 'dev'" },
     { name = "numpy" },
-    { name = "opencv-python-headless", marker = "extra == 'process'" },
-    { name = "planetary-computer" },
+    { name = "opencv-python-headless" },
+    { name = "planetary-computer", marker = "extra == 'dev'" },
     { name = "pyarrow" },
     { name = "pyogrio" },
     { name = "pystac-client" },
@@ -2666,12 +2667,10 @@ requires-dist = [
     { name = "rasterio" },
     { name = "requests" },
     { name = "rio-cogeo", marker = "extra == 'dev'" },
-    { name = "rio-tiler", marker = "extra == 'process'" },
-    { name = "s3fs", specifier = ">=2024" },
     { name = "shapely" },
-    { name = "stac-geoparquet", marker = "extra == 'catalog'" },
+    { name = "stac-geoparquet", marker = "extra == 'dev'" },
 ]
-provides-extras = ["process", "dev", "catalog"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "urllib3"

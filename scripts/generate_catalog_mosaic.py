@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Enumerate the out folder and build per-year MosaicJSONs + a STAC GeoParquet.
 
-Host-side post-processing for a finished run; needs the ``catalog`` extra:
+Host-side post-processing for a finished run; needs the ``dev`` extra:
 
-    uv run --extra catalog python scripts/generate_catalog_mosaic.py --run-id v1_1
-    uv run --extra catalog python scripts/generate_catalog_mosaic.py --year 2020 --year 2021
+    uv run --extra dev python scripts/generate_catalog_mosaic.py --run-id v1_1
+    uv run --extra dev python scripts/generate_catalog_mosaic.py --year 2020 --year 2021
 
 Each COG header is read once (``get_dataset_info``) and feeds both the mosaics and the STAC items.
 """
