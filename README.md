@@ -19,13 +19,13 @@ against global spatial proxies for human pressure. Biodiversity Intactness is co
 
 | input | dataset | citation | per-year | updated |
 |---|---|---|---|---|
-| land cover | [Sentinel-2 10 m Land Use/Land Cover Time Series, 9-class](https://registry.opendata.aws/io-lulc/) (2017–2024) | Karra et al. 2021 | yes | yes (io-lulc-9-class → io-10m-annual-lulc) |
-| forest loss | [Global Forest Change, v1.12](https://glad.umd.edu/dataset/global-forest-change) (2000–2024) | Hansen et al. 2013 | yes| yes (v1.9 → v1.12) |
+| land cover | [Sentinel-2 10 m Land Use/Land Cover Time Series, 9-class](https://registry.opendata.aws/io-lulc/) (2017–2024) | Karra et al. 2021 | yes | yes |
+| forest loss | [Global Forest Change, v1.12](https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/download.html) (2000–2024) | Hansen et al. 2013 | yes| yes |
 | forest management | [Global Forest Management, v3.2](https://zenodo.org/records/4541513) (2015) | Lesiv et al. 2022 | no | no |
-| population | [WorldPop Global Population, constrained 100 m, R2025A](https://hub.worldpop.org/geodata/listing?id=135) (2015–2030) | WorldPop et al. 2018 | yes | yes (Global_2000_2020 → R2025A) |
-| nightlights | [VIIRS Nighttime Lights (VNL), v2.1 / v2.2 annual median composites](https://eogdata.mines.edu/products/vnl/) (2017–2024) | Elvidge et al. 2021 | yes | yes (v2.0 → v2.1/v2.2) |
-| accessibility | [Global Map of Travel Time to Cities](https://malariaatlas.org/project-resources/accessibility-to-healthcare/) (2015) | Weiss et al. 2018 | no | no |
-| roads | [OpenStreetMap](https://www.openstreetmap.org/) (2026-06-25) | OpenStreetMap contributors | no | yes (current snapshot) |
+| population | [WorldPop Global Population, constrained 100 m, R2025A](https://hub.worldpop.org/geodata/listing?id=135) (2015–2030) | Bondarenko et al. 2025 | yes | yes |
+| nightlights | [VIIRS Nighttime Lights (VNL), v2.1 / v2.2 annual median composites](https://eogdata.mines.edu/products/vnl/) (2017–2024) | Elvidge et al. 2021 | yes | yes |
+| accessibility | [Global Map of Travel Time to Cities](https://malariaatlas.org/project-resources/accessibility-to-cities/) (2015) | Weiss et al. 2018 | no | no |
+| roads | [OpenStreetMap](https://www.openstreetmap.org/) (2026-06-25) | OpenStreetMap contributors | no | yes |
 
 v1.1 results closely match values for the original timeseries with minor differences due to updated source datasets. 
 Most notably, this version uses WorldPop's constrained estimates, while the original used unconstrained population estimates
