@@ -134,8 +134,15 @@ const colormapImage = Promise.all([
   return new ImageData(data, 256, sprite.height + 1);
 });
 
+// Decoded tile arrays are cached per image (the S3 COGs send no Cache-Control, so the
+// browser refetches range requests) — switching years then only rebuilds GPU textures.
+const tileArrays = new WeakMap();
 async function getTileData(image, { device, x, y, signal, pool }) {
-  const { array } = await image.fetchTile(x, y, { boundless: false, signal, pool });
+  let byTile = tileArrays.get(image);
+  if (!byTile) tileArrays.set(image, byTile = new Map());
+  const key = `${x},${y}`;
+  let array = byTile.get(key);
+  if (!array) byTile.set(key, array = (await image.fetchTile(x, y, { boundless: false, signal, pool })).array);
   const { width, height, data, mask } = array;
   const sampler = { minFilter: "nearest", magFilter: "nearest" };
   const texture = device.createTexture({ data, format: "r32float", width, height, sampler });
@@ -153,14 +160,12 @@ function renderTile(d) {
   return { renderPipeline };
 }
 
-function buildLayer(yr, sources, visible) {
+function buildLayer(yr, sources) {
   return new MosaicLayer({
     id: `bii-${yr}`,
-    visible,
     sources,
     minZoom: 3,
     maxRequests: 12,
-    maxCacheSize: 0,
     getSource: (s, o) => getTiff(s.url, { signal: o.signal, concurrencyLimiter: o.concurrencyLimiter }),
     renderSource: (s, { data, signal }) =>
       new COGLayer({
@@ -188,10 +193,10 @@ function pcTiles(yr) {
   return `${PC}/mosaic/${PC_SEARCH[yr]}/tiles/WebMercatorQuad/{z}/{x}/{y}@2x?${PC_RENDER}`;
 }
 
-// Layers are kept loaded once built and toggled by visibility so swapping back is instant.
+// Only the active year is rendered; its GeoTIFF handles (in `tiffs`) and source list
+// stay cached, so switching back rebuilds the GPU textures without refetching.
 const sourcesByYear = new Map();
 const pcYears = new Set();    // PC raster layers added, one per year
-const builtYears = new Set(); // deck mosaics added to the overlay, one per year
 async function refresh() {
   if (source === "pc" && !pcYears.has(year)) {
     pcYears.add(year);
@@ -202,13 +207,10 @@ async function refresh() {
   for (const y of pcYears)
     map.setLayoutProperty(`pc-${y}`, "visibility", source === "pc" && y === year ? "visible" : "none");
 
-  if (source === "ours") {
-    if (!sourcesByYear.has(year)) sourcesByYear.set(year, await loadSources(year));
-    builtYears.add(year);
-  }
-  const active = source === "ours" ? year : null;
-  overlay.setProps({ layers: [...builtYears].map(yr =>
-    buildLayer(yr, sourcesByYear.get(yr), yr === active)) });
+  if (source === "ours" && !sourcesByYear.has(year))
+    sourcesByYear.set(year, await loadSources(year));
+  overlay.setProps({ layers: source === "ours" && sourcesByYear.has(year)
+    ? [buildLayer(year, sourcesByYear.get(year))] : [] });
 }
 
 const sourceSel = document.getElementById("source");
