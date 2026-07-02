@@ -78,10 +78,11 @@ def convolve(arr, radius, scale=1):
 
 
 def fast_distance_transform(arr):
-    """Squared Euclidean distance (px^2) to the nearest truthy cell, via ``edt``."""
+    """Euclidean distance (px) to the nearest truthy cell, via ``edt``."""
     if arr.ndim == 3 and arr.shape[0] == 1:
         arr = arr[0]
-    return edt.edtsq(np.logical_not(arr))[np.newaxis]
+    # black_border=True treats edges as roads, avoiding a linux-specific edt bug.
+    return edt.edt(np.logical_not(arr), black_border=True)[np.newaxis]
 
 
 def close_landcover_seams(lc):
@@ -129,7 +130,7 @@ def read_annual_assets(worker, year: int) -> dict:
 def _static_predictors(layers: dict, scale: float) -> Iterator[tuple[str, object]]:
     """Year-invariant predictors. :func:`compute_all` folds these once and reuses across years — the
     costly distance transform and dilations don't change year to year."""
-    distRoads = np.clip(np.sqrt(fast_distance_transform(layers["roads"])) * scale, 0, 10000)  # m, 10 km clip
+    distRoads = np.clip(fast_distance_transform(layers["roads"]) * scale, 0, 10000)  # m, 10 km clip
     # accessibility is ~1 km native: grow valid zone 1 native px to cover jagged nodata
     accessibility = expand_valid(layers["accessibility"], max(1, round(1000 / scale)))
     accessibility = np.clip(accessibility, 0, 1440)
