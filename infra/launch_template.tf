@@ -22,9 +22,11 @@ locals {
     mkdir -p /scratch
     mount "$DISK" /scratch
     mkdir -p /scratch/docker
-    systemctl stop docker
+    systemctl stop ecs || true
+    systemctl stop docker docker.socket || true
     echo '{"data-root":"/scratch/docker"}' > /etc/docker/daemon.json
     systemctl start docker
+    systemctl start ecs || true
     --==BII==--
   EOT
 }
