@@ -19,7 +19,7 @@ variable "processing_bucket" {
 variable "max_vcpus" {
   description = "Ceiling on concurrent vCPUs in the Spot compute environment."
   type        = number
-  default     = 256
+  default     = 2
 }
 
 # Memory-optimized (1:8 vCPU:mem) with NVMe scratch (launch_template.tf). 
