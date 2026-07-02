@@ -28,7 +28,7 @@ against global spatial proxies for human pressure. Biodiversity Intactness is co
 | roads | [OpenStreetMap](https://www.openstreetmap.org/) (2026-06-25) | OpenStreetMap contributors | no | yes |
 
 v1.1 results closely match values for the original timeseries with minor differences due to updated source datasets. 
-Most notably, this version uses WorldPop's constrained estimates, while the original used unconstrained population estimates
+Most notably, this version uses WorldPop's constrained population estimates, while the original used unconstrained estimates
 due to data availability.
 
 ## Run
@@ -69,7 +69,7 @@ python scripts/run.py --executor batch                         # global
 
  - **BII layers:** per-year COGs at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_<north>_<west>.tif`; public read over HTTP at `https://vizz-bii.s3.amazonaws.com/...`.
  - **Mosaic index:** per-year MosaicJSON (quadkey → overlapping COG URIs) at `s3://vizz-bii/out/<run_id>/bii_<year>/bii_<year>_mosaic.json`.
- - **Input footprint indexes:** per-asset GeoParquet (`{geometry, uri}`) at `s3://vizz-bii-processing/input_cogs/<asset>/[<year>/]<asset>_index.parquet`.
+ - **STAC catalog:** one STAC GeoParquet over every output COG at `s3://vizz-bii/out/<run_id>/catalog.parquet`.
 
 ## Notebooks
  - `1. visualize-local.ipynb`: after `test_stage_local.py`, inspect and preview bii.
