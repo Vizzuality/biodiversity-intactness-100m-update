@@ -4,8 +4,12 @@ resource "aws_cloudwatch_log_group" "batch" {
 }
 
 resource "aws_batch_compute_environment" "this" {
-  compute_environment_name = var.name
-  type                     = "MANAGED"
+  compute_environment_name_prefix = "${var.name}-"
+  type                            = "MANAGED"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   compute_resources {
     type                = "SPOT"
