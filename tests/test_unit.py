@@ -85,6 +85,19 @@ def test_index_build_and_lookup(local_staged):
     assert far == []
 
 
+def test_index_splits_antimeridian_region(local_staged):
+    """Regions straddling the antimeridian (e.g. Fiji) have west > east; pre-fix this inverted
+    into a globe-spanning bbox that matched every lookup."""
+    fiji = ("s3://b/fiji.tif", (176.8, -20.7, -178.0, -12.5))  # w, s, e, n
+    germany = ("s3://b/germany.tif", (5.9, 47.3, 15.0, 55.1))
+    tile_index.build_index("roads", [fiji, germany])
+
+    assert tile_index.lookup("roads", (179, -19, -179, -13)) == ["s3://b/fiji.tif"]
+    # Same latitude band as Fiji but on the far side of the globe: pre-fix, the inverted bbox
+    # covered nearly the whole longitude range at this latitude and matched here too.
+    assert tile_index.lookup("roads", (100, -18, 101, -17)) == []
+
+
 def _write_cog(uri, bounds, n=8):
     """Write an EPSG:4326 raster covering ``bounds`` (w, s, e, n) to ``uri``."""
     transform = rio.transform.from_bounds(*bounds, n, n)

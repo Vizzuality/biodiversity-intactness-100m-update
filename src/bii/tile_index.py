@@ -10,7 +10,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import geopandas as gpd
-from shapely.geometry import box, shape
+from shapely.geometry import MultiPolygon, box, shape
 
 from . import config, io
 from . import cog
@@ -29,12 +29,20 @@ def _write_parquet(gdf: gpd.GeoDataFrame, uri: str) -> None:
         gdf.to_parquet(path)
 
 
+def _bbox_polys(west: float, south: float, east: float, north: float) -> list:
+    """``(west, south, east, north)`` as one or two boxes, splitting at the antimeridian when
+    ``west > east``."""
+    if west > east:
+        return [box(west, south, 180, north), box(-180, south, east, north)]
+    return [box(west, south, east, north)]
+
+
 def _to_gdf(footprints) -> gpd.GeoDataFrame:
     """Build a GeoDataFrame from ``(uri, geom_or_bounds)`` pairs."""
     geoms, uris = [], []
     for uri, geom in footprints:
         if isinstance(geom, (tuple, list)):  # (west, south, east, north)
-            geoms.append(box(*geom))
+            geoms.append(MultiPolygon(_bbox_polys(*geom)))
         elif hasattr(geom, "geom_type"):
             geoms.append(geom)
         else:  # geojson-like mapping
@@ -87,5 +95,5 @@ def lookup(asset: str, bounds: tuple[float, float, float, float], year: int | No
     gdf = read_index(asset, year)
     if gdf is None:
         return []
-    idx = list(gdf.sindex.query(box(*bounds), predicate="intersects"))
-    return gdf.iloc[idx]["uri"].tolist()
+    idx = {i for poly in _bbox_polys(*bounds) for i in gdf.sindex.query(poly, predicate="intersects")}
+    return gdf.iloc[list(idx)]["uri"].tolist()
