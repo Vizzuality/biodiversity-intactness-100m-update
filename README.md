@@ -20,7 +20,7 @@ against global spatial proxies for human pressure. Biodiversity Intactness is co
 | input | dataset | citation | per-year | updated |
 |---|---|---|---|---|
 | land cover | [Sentinel-2 10 m Land Use/Land Cover Time Series, 9-class](https://registry.opendata.aws/io-lulc/) (2017–2024) | Karra et al. 2021 | yes | yes |
-| forest loss | [Global Forest Change, v1.12](https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/download.html) (2000–2024) | Hansen et al. 2013 | yes| yes |
+| forest loss | [Global Forest Change, v1.13](https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13/download.html) (2000–2025) | Hansen et al. 2013 | yes| yes |
 | forest management | [Global Forest Management, v3.2](https://zenodo.org/records/4541513) (2015) | Lesiv et al. 2022 | no | no |
 | population | [WorldPop Global Population, constrained 100 m, R2025A](https://hub.worldpop.org/geodata/listing?id=135) (2015–2030) | Bondarenko et al. 2025 | yes | yes |
 | nightlights | [VIIRS Nighttime Lights (VNL), v2.1 / v2.2 annual median composites](https://eogdata.mines.edu/products/vnl/) (2017–2024) | Elvidge et al. 2021 | yes | yes |

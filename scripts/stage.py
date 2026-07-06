@@ -32,8 +32,9 @@ def main(argv=None) -> dict:
 
     if args.dry_run:
         items = stage.manifest_items(args.dataset, args.year)
+        pending = items if args.overwrite else stage._pending(items)
         units = [{"dataset": it["dataset"], "id": it["unit"]["id"], "dst": it["unit"]["dst"]}
-                 for it in stage._pending(items)]
+                 for it in pending]
         result = {"planned": len(items), "pending": len(units), "units": units}
     elif args.index_only:
         result = stage.reindex(args.dataset, args.year, executor=args.executor)

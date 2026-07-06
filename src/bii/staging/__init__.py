@@ -28,7 +28,6 @@ MODULES = {
     "nightlights": nightlights,
     "travel_time": travel_time,
     "fml": forest_management,
-    "sdpt": sdpt,
     "roads": roads,
     "iolulc": iolulc,
 }

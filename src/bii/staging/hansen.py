@@ -1,6 +1,6 @@
 """Stage Hansen Global Forest Change ``lossyear`` -> forestLoss COGs (one job per 10deg tile).
 
-``lossyear`` encodes year of loss (1-24 = 2001-2024, 0 = no loss). We flag 0 as nodata so ``mode``
+``lossyear`` encodes year of loss (1-25 = 2001-2025, 0 = no loss). We flag 0 as nodata so ``mode``
 overviews skip no-loss pixels: any loss in a cell survives (overview > 0) keeping a real loss year,
 matching the v1 forest-loss layer the model coefficients were fit against. Ocean tiles 404.
 """
@@ -18,8 +18,8 @@ from .. import cog
 ASSET = "forestLoss"
 LAYER = "lossyear"
 
-BASE = "https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12"
-VERSION = "GFC-2024-v1.12"
+BASE = "https://storage.googleapis.com/earthenginepartners-hansen/GFC-2025-v1.13"
+VERSION = "GFC-2025-v1.13"
 # 10deg tile grid, labeled by upper-left corner per Hansen's naming convention.
 LATS = [f"{d:02d}N" for d in range(10, 90, 10)] + ["00N"] + [
     f"{d:02d}S" for d in range(10, 60, 10)

@@ -46,7 +46,7 @@ BUFFER = round(10000 / SCALE_METERS)
 
 # LULC + WorldPop + nightlights are per-year; the rest single-epoch.
 START_YEAR = int(os.environ.get("BII_START_YEAR", 2017))
-END_YEAR = int(os.environ.get("BII_END_YEAR", 2024))
+END_YEAR = int(os.environ.get("BII_END_YEAR", 2025))
 
 
 def years() -> list[int]:
