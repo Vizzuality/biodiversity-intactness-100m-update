@@ -2633,6 +2633,7 @@ dependencies = [
     { name = "pystac-client" },
     { name = "rasterio" },
     { name = "requests" },
+    { name = "s3fs" },
     { name = "shapely" },
 ]
 
@@ -2667,6 +2668,7 @@ requires-dist = [
     { name = "rasterio" },
     { name = "requests" },
     { name = "rio-cogeo", marker = "extra == 'dev'" },
+    { name = "s3fs", specifier = ">=2024.2.0" },
     { name = "shapely" },
     { name = "stac-geoparquet", marker = "extra == 'dev'" },
 ]

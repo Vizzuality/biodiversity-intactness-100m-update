@@ -8,6 +8,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src
-RUN uv pip install --system --break-system-packages --no-cache .
+RUN uv sync --locked --no-cache
+ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["bii-process"]
+CMD ["uv", "run", "bii-process"]
