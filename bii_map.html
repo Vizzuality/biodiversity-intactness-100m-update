@@ -22,8 +22,8 @@
 <div id="panel">
   <strong>Biodiversity Intactness</strong>
   <label>Source <select id="source">
-    <option value="ours">BII v1.1</option>
-    <option value="pc">Planetary Computer</option>
+    <option value="ours">Biodiversity Intactness v1.1</option>
+    <option value="pc">Planetary Computer (v1.0)</option>
   </select></label>
   <div id="timeline">
     <button id="play">▶</button>
@@ -49,7 +49,7 @@ const { GeoTIFF, DecoderPool } = await import("https://esm.sh/@developmentseed/g
 const pool = new DecoderPool();
 
 const BUCKET = "https://vizz-bii.s3.amazonaws.com/out/v1_1";
-const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024];
+const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
 const COLORMAP_PNG = "https://cdn.jsdelivr.net/npm/@developmentseed/deck.gl-raster@0.8.0-beta.2/dist/gpu-modules/colormaps.png";
 
 // Planetary Computer io-biodiversity (Impact Observatory), the same render the PC explorer uses.
@@ -185,6 +185,7 @@ const map = new maplibregl.Map({
   style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
   center: [0, 20],
   zoom: 4,
+  minZoom: 3,
 });
 const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
 map.addControl(overlay);
