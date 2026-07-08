@@ -20,7 +20,7 @@ def main(argv=None) -> dict:
     parser = argparse.ArgumentParser(description="Build, run, and retry a BII processing run.")
     parser.add_argument("--run-id", default=None, help="output prefix (default: BII_RUN_ID / config.RUN_ID)")
     parser.add_argument("--bounds", type=float, nargs=4, metavar=("W", "S", "E", "N"),
-                        default=[-180.0, -85.0, 180.0, 85.0], help="analysis extent in EPSG:4326")
+                        default=list(config.BOUNDS), help="analysis extent in EPSG:4326")
     parser.add_argument("--executor", choices=("docker", "batch"), default="batch",
                         help="where to run chunks (default: batch on AWS)")
     parser.add_argument("--overwrite", action="store_true", help="reprocess chunks whose outputs already exist")

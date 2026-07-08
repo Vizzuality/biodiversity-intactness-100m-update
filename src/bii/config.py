@@ -37,6 +37,9 @@ def out_uri(*parts: str) -> str:
 
 DEG2METERS = 111319.49079327357
 
+# Global analysis extent: capped at 85N; excludes Antarctica south of 60S.
+BOUNDS = (-180.0, -60.0, 180.0, 85.0)
+
 PROJ = "EPSG:4326"
 SCALE_METERS = 100.0
 SCALE_DEG = SCALE_METERS / DEG2METERS  # deg/px (~100 m at equator)
