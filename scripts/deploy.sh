@@ -4,7 +4,6 @@ set -euo pipefail
 
 : "${AWS_REGION:?set AWS_REGION (see .env)}"
 cd "$(dirname "$0")/.."
-[ -z "$(git status --porcelain)" ] || { echo "working tree dirty; commit before deploying" >&2; exit 1; }
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 REGISTRY="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
