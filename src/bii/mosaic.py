@@ -50,6 +50,7 @@ def build_mosaic(year: int, run_id: str | None = None) -> str:
             "-co", "COMPRESS=ZSTD", "-co", "PREDICTOR=3", "-co", "BLOCKSIZE=512",
             "-co", "BIGTIFF=YES", "-co", "NUM_THREADS=ALL_CPUS",
             "-co", "OVERVIEW_RESAMPLING=AVERAGE",
+            "-co", "OVERVIEWS=IGNORE_EXISTING",
         ], check=True, env=env)
     return dst
 
