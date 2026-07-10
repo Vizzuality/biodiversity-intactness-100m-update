@@ -37,6 +37,7 @@ dev = [
 bii-stage = "bii.stage:stage"
 bii-index = "bii.stage:index"
 bii-process = "bii.process:process"
+bii-mosaic = "bii.mosaic:mosaic"
 
 [build-system]
 requires = ["hatchling"]
