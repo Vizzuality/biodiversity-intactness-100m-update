@@ -1,14 +1,4 @@
-"""Mosaic a run's per-chunk tile COGs into one monolithic COG per year.
-
-Tiles already share one grid, so assembly needs no resampling. Building the COG straight from the
-``/vsis3`` VRT with ``OVERVIEWS=IGNORE_EXISTING`` makes the COG driver read the remote source 2-3
-times -- a mask-overview pass, an imagery-overview pass, and the base CreateCopy all read
-``poCurDS`` (the VRT) at full resolution (see ``cogdriver.cpp``). So we first fetch every tile to
-local disk, then run the COG conversion against a VRT over those local files: the repeated reads
-hit local disk instead of S3, so no separate local-base pass is needed. Written beside, not inside,
-the tile tree (``<run_id>_mosaic/``) so ``generate_catalog_mosaic.py``'s recursive ``*.tif`` scan
-doesn't pick it up as a chunk.
-"""
+"""Mosaic per-chunk tile COGs into one monolithic COG per year."""
 
 from __future__ import annotations
 
@@ -18,9 +8,7 @@ import tempfile
 
 from . import cog, config, io, orchestration
 
-# Tiles are read from local disk now, so only the block cache needs tuning; 4 GB stays well under
-# the 15 GB container (500 OOM'd).
-GDAL_ENV = dict(cog.GDAL_READ_ENV, GDAL_CACHEMAX="4096")
+GDAL_ENV = dict(cog.GDAL_READ_ENV, GDAL_CACHEMAX="2048")
 
 
 ENC = ["-co", "COMPRESS=ZSTD", "-co", "PREDICTOR=3", "-co", "BIGTIFF=YES",
@@ -38,9 +26,7 @@ def mosaic_uri(run_id: str, year: int) -> str:
 
 def build_mosaic(year: int, run_id: str | None = None) -> str:
     """Assemble ``run_id``'s ``bii_<year>`` tiles into one COG; return its uri. Every tile is
-    fetched to local disk first, then the COG conversion (which cascade-builds the overviews) runs
-    against a VRT over those local files -- identical output to converting the remote tiles
-    directly, without the COG driver's repeated remote reads."""
+    fetched to local disk first."""
     run_id = run_id or config.RUN_ID
     tiles = tile_uris(run_id, year)
     if not tiles:
