@@ -24,6 +24,11 @@ def upload(local_path: str, uri: str) -> None:
     fs.put_file(local_path, path)
 
 
+def download(uri: str, local_path: str) -> None:
+    fs, path = fsspec.core.url_to_fs(uri)
+    fs.get_file(path, local_path)
+
+
 def put_bytes(data: bytes, uri: str) -> None:
     fs, path = fsspec.core.url_to_fs(uri, **({} if is_s3(uri) else {"auto_mkdir": True}))
     fs.pipe_file(path, data)
