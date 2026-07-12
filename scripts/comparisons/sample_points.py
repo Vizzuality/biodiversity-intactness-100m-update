@@ -1,5 +1,5 @@
-"""Stratified random sample points by continent and by biome, for comparing BII 2020 to the
-Global Human Modification Index and the NHM BII.
+"""Stratified random sample points by continent and by biome, plus an unstratified global
+sample, for comparing BII 2020 to the Global Human Modification Index and the NHM BII.
 
 Biomes come from RESOLVE Ecoregions 2017; continents from Natural Earth admin-0 countries.
 Points are drawn uniformly by ground area (sampling in an equal-area CRS) within each stratum's
@@ -46,6 +46,12 @@ def load_continents() -> gpd.GeoDataFrame:
     return gdf[~gdf["CONTINENT"].isin(drop)].rename(columns={"CONTINENT": "continent"})
 
 
+def load_global() -> gpd.GeoDataFrame:
+    gdf = load_continents()[["geometry"]]
+    gdf["global"] = "global"
+    return gdf
+
+
 def sample(gdf: gpd.GeoDataFrame, col: str, n: int, seed: int) -> gpd.GeoDataFrame:
     """n uniform-by-area random points per unique value of `col`, returned in EPSG:4326."""
     strata = gdf.dissolve(by=col).to_crs(EQUAL_AREA)
@@ -58,12 +64,15 @@ def sample(gdf: gpd.GeoDataFrame, col: str, n: int, seed: int) -> gpd.GeoDataFra
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-n", type=int, default=1000, help="points per stratum")
+    ap.add_argument("--n-global", type=int, default=10_000, help="points in the unstratified global sample")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
     DATA.mkdir(parents=True, exist_ok=True)
-    for name, loader in (("continent", load_continents), ("biome", load_biomes)):
-        pts = sample(loader(), name, args.n, args.seed)
+    strata = (("continent", load_continents, args.n), ("biome", load_biomes, args.n),
+              ("global", load_global, args.n_global))
+    for name, loader, n in strata:
+        pts = sample(loader(), name, n, args.seed)
         dst = DATA / f"sample_{name}.parquet"
         pts.to_parquet(dst)
         print(f"{dst}: {len(pts)} points across {pts[name].nunique()} {name}s")
