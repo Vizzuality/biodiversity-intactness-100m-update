@@ -146,7 +146,7 @@ def _static_predictors(layers: dict, scale: float) -> Iterator[tuple[str, object
 def _annual_predictors(layers: dict, scale: float, year: int) -> Iterator[tuple[str, object]]:
     """Predictors that vary by year: landcover/population/nightlights focals and year-filtered
     forest loss."""
-    ln_nightlights = np.log(np.ma.filled(layers["nightlights"], 0) + 1)
+    ln_nightlights = np.log(layers["nightlights"] + 1).filled(0)
     ln_population = np.log(np.nan_to_num(np.ma.filled(layers["population"], 0), 0) + 1)
     crops = layers["landcover"].data == 5  # LULC: 5 crops, 7 built area
     builtArea = layers["landcover"].data == 7
