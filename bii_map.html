@@ -48,7 +48,7 @@ const { GeoTIFF, DecoderPool } = await import("https://esm.sh/@developmentseed/g
 // No createWorker -> decode on the main thread (cross-origin workers are blocked).
 const pool = new DecoderPool();
 
-const BUCKET = "https://vizz-bii.s3.amazonaws.com/out/v1_1";
+const MOSAIC = "https://data.source.coop/vizzuality/biodiversity-intactness-100m-v1-1";
 const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
 const COLORMAP_PNG = "https://cdn.jsdelivr.net/npm/@developmentseed/deck.gl-raster@0.8.0-beta.2/dist/gpu-modules/colormaps.png";
 
@@ -70,33 +70,9 @@ const PC_YEARS = Object.keys(PC_SEARCH).map(Number);
 let year = 2020;
 let source = "ours";
 
-// quadkey -> [minLon, minLat, maxLon, maxLat]
-function quadkeyBbox(qk) {
-  let x = 0, y = 0;
-  const z = qk.length;
-  for (let i = 0; i < z; i++) {
-    const m = 1 << (z - i - 1), d = qk[i];
-    if (d === "1") x |= m;
-    else if (d === "2") y |= m;
-    else if (d === "3") { x |= m; y |= m; }
-  }
-  const n = 2 ** z, lat = t => Math.atan(Math.sinh(Math.PI * (1 - 2 * t))) * 180 / Math.PI;
-  return [x / n * 360 - 180, lat((y + 1) / n), (x + 1) / n * 360 - 180, lat(y / n)];
-}
-
-async function loadSources(yr) {
-  const mj = await (await fetch(`${BUCKET}/bii_${yr}/bii_${yr}_mosaic.json`)).json();
-  const bb = new Map();
-  for (const [qk, cogs] of Object.entries(mj.tiles)) {
-    const b = quadkeyBbox(qk);
-    for (const c of cogs) {
-      const url = c.replace("s3://vizz-bii/", "https://vizz-bii.s3.amazonaws.com/");
-      const e = bb.get(url);
-      if (e) { e[0] = Math.min(e[0], b[0]); e[1] = Math.min(e[1], b[1]); e[2] = Math.max(e[2], b[2]); e[3] = Math.max(e[3], b[3]); }
-      else bb.set(url, [...b]);
-    }
-  }
-  return [...bb].map(([url, bbox]) => ({ id: url, url, bbox }));
+function loadSources(yr) {
+  const url = `${MOSAIC}/bii_${yr}.tif`;
+  return [{ id: url, url, bbox: [-180, -60, 180, 85] }];
 }
 
 const tiffs = new Map();
@@ -164,7 +140,7 @@ function buildLayer(yr, sources) {
   return new MosaicLayer({
     id: `bii-${yr}`,
     sources,
-    minZoom: 3,
+    minZoom: 2,
     maxRequests: 12,
     getSource: (s, o) => getTiff(s.url, { signal: o.signal, concurrencyLimiter: o.concurrencyLimiter }),
     renderSource: (s, { data, signal }) =>
@@ -185,7 +161,7 @@ const map = new maplibregl.Map({
   style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
   center: [0, 20],
   zoom: 4,
-  minZoom: 3,
+  minZoom: 2,
 });
 const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
 map.addControl(overlay);
