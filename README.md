@@ -4,7 +4,7 @@ Annual global 100m gridded maps of terrestrial Biodiversity Intactness, extended
 
  - **Download**: [Source.coop repository](https://source.coop/vizzuality/biodiversity-intactness-100m-v1-1)
  - **Preview**: [Map viewer](https://vizz-bii.s3.amazonaws.com/out/bii_map.html)
- - **Methodology**: [LINK]
+ - **Methodology**: [Technical white paper](https://data.source.coop/vizzuality/biodiversity-intactness-100m-v1-1/biodiversity-intactness-100m-white-paper-v1.1.pdf)
 
 This is an update of the Biodiversity Intactness product by Impact Observatory and Vizzuality, originally
 covering 2017-2020 ([Planetary Computer dataset](https://planetarycomputer.microsoft.com/dataset/io-biodiversity),

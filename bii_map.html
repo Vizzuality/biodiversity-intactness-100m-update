@@ -5,28 +5,35 @@
 <style>
   html, body, #map { margin: 0; height: 100%; }
   #panel {
-    position: absolute; top: 10px; left: 10px; z-index: 1; padding: 10px;
+    position: absolute; top: 10px; left: 10px; z-index: 1; padding: 10px; width: 200px;
     background: rgba(20,20,20,.85); color: #eee; font: 13px sans-serif; border-radius: 6px;
   }
   #panel select { margin-left: 6px; }
   #panel label { display: block; margin: 4px 0; }
   #timeline { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
-  #timeline input { flex: 1; }
-  #play { width: 26px; cursor: pointer; }
+  #timeline input { flex: 1; min-width: 0; }
   #yearlbl { width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
   #legend { margin-top: 8px; }
-  #legendbar { display: block; width: 200px; height: 12px; border-radius: 2px; }
-  #legendticks { display: flex; justify-content: space-between; width: 200px; opacity: .8; margin-top: 2px; }
+  #legendbar { display: block; width: 100%; height: 12px; border-radius: 2px; }
+  #legendticks { display: flex; justify-content: space-between; opacity: .8; margin-top: 2px; }
+  #about { margin: 8px 0 0; opacity: .8; line-height: 1.4; }
+  #about a { color: #8cf; }
+  #credit { margin: 0; font-size: 11px; opacity: .7; }
+  #credit a { color: #8cf; }
+  #panel hr { border: none; border-top: 1px solid rgba(255,255,255,.2); margin: 8px 0; }
 </style>
 <div id="map"></div>
 <div id="panel">
   <strong>Biodiversity Intactness</strong>
-  <label>Source <select id="source">
-    <option value="ours">Biodiversity Intactness v1.1</option>
-    <option value="pc">Planetary Computer (v1.0)</option>
+  <p id="about">Modeled biodiversity loss due to human pressures at a 100m resolution. Higher scores reflect more intact ecosystems.<br />
+    <a href="https://data.source.coop/vizzuality/biodiversity-intactness-100m-v1-1/biodiversity-intactness-100m-white-paper-v1.1.pdf" target="_blank" rel="noopener">Methodology ↗</a><br />
+    <a href="https://source.coop/vizzuality/biodiversity-intactness-100m-v1-1" target="_blank" rel="noopener">Download ↗</a></p>
+  <hr />
+  <label>Version <select id="source">
+    <option value="ours">1.1</option>
+    <option value="pc">1.0</option>
   </select></label>
   <div id="timeline">
-    <button id="play">▶</button>
     <input id="year" type="range" />
     <span id="yearlbl"></span>
   </div>
@@ -34,16 +41,20 @@
     <canvas id="legendbar"></canvas>
     <div id="legendticks"><span>0</span><span>0.5</span><span>1</span></div>
   </div>
+  <hr />
+  <p id="credit">CC-BY —
+    <a href="https://vizzuality.com" target="_blank" rel="noopener">Vizzuality</a>,
+    <a href="https://www.impactobservatory.com" target="_blank" rel="noopener">Impact Observatory</a></p>
 </div>
 <script type="module">
 import maplibregl from "https://esm.sh/maplibre-gl@5";
 
 const DEPS = "deps=@deck.gl/core@9.3.2,@deck.gl/layers@9.3.2,@deck.gl/geo-layers@9.3.2,@deck.gl/mesh-layers@9.3.2,@luma.gl/core@9.3.2,@luma.gl/engine@9.3.2,@luma.gl/shadertools@9.3.2";
 const { MapboxOverlay } = await import(`https://esm.sh/@deck.gl/mapbox@9.3.2?${DEPS}`);
-const { MosaicLayer, COGLayer } = await import(`https://esm.sh/@developmentseed/deck.gl-geotiff@0.8.0-beta.2?${DEPS}`);
+const { COGLayer } = await import(`https://esm.sh/@developmentseed/deck.gl-geotiff@0.8.0-beta.2?${DEPS}`);
 const { CreateTexture, Colormap, MaskTexture, createColormapTexture, decodeColormapSprite } =
   await import(`https://esm.sh/@developmentseed/deck.gl-raster@0.8.0-beta.2/gpu-modules?${DEPS}`);
-const { GeoTIFF, DecoderPool } = await import("https://esm.sh/@developmentseed/geotiff@0.8.0-beta.2");
+const { DecoderPool } = await import("https://esm.sh/@developmentseed/geotiff@0.8.0-beta.2");
 
 // No createWorker -> decode on the main thread (cross-origin workers are blocked).
 const pool = new DecoderPool();
@@ -69,18 +80,6 @@ const PC_YEARS = Object.keys(PC_SEARCH).map(Number);
 
 let year = 2020;
 let source = "ours";
-
-function loadSources(yr) {
-  const url = `${MOSAIC}/bii_${yr}.tif`;
-  return [{ id: url, url, bbox: [-180, -60, 180, 85] }];
-}
-
-const tiffs = new Map();
-function getTiff(url, opts) {
-  let p = tiffs.get(url);
-  if (!p) { p = GeoTIFF.fromUrl(url, opts).catch(e => { tiffs.delete(url); throw e; }); tiffs.set(url, p); }
-  return p;
-}
 
 // Bake the PC render expression into a 256-entry colormap row so our COGs match the
 // Planetary Computer tiles: colour(x) = io-bii(0.97 * x ** 3.84). Appended as the sprite's
@@ -110,16 +109,8 @@ const colormapImage = Promise.all([
   return new ImageData(data, 256, sprite.height + 1);
 });
 
-// Decoded tile arrays are cached per image (the S3 COGs send no Cache-Control, so the
-// browser refetches range requests) — switching years then only rebuilds GPU textures.
-const tileArrays = new WeakMap();
 async function getTileData(image, { device, x, y, signal, pool }) {
-  let byTile = tileArrays.get(image);
-  if (!byTile) tileArrays.set(image, byTile = new Map());
-  const key = `${x},${y}`;
-  let array = byTile.get(key);
-  if (!array) byTile.set(key, array = (await image.fetchTile(x, y, { boundless: false, signal, pool })).array);
-  const { width, height, data, mask } = array;
+  const { width, height, data, mask } = (await image.fetchTile(x, y, { boundless: false, signal, pool })).array;
   const sampler = { minFilter: "nearest", magFilter: "nearest" };
   const texture = device.createTexture({ data, format: "r32float", width, height, sampler });
   const maskTexture = mask && device.createTexture({ data: mask, format: "r8unorm", width, height, sampler });
@@ -136,23 +127,16 @@ function renderTile(d) {
   return { renderPipeline };
 }
 
-function buildLayer(yr, sources) {
-  return new MosaicLayer({
+function buildLayer(yr) {
+  return new COGLayer({
     id: `bii-${yr}`,
-    sources,
+    geotiff: `${MOSAIC}/bii_${yr}.tif`,
     minZoom: 2,
     maxRequests: 12,
-    getSource: (s, o) => getTiff(s.url, { signal: o.signal, concurrencyLimiter: o.concurrencyLimiter }),
-    renderSource: (s, { data, signal }) =>
-      new COGLayer({
-        id: `cog-${yr}-${s.url}`,
-        geotiff: data,
-        pool,
-        getTileData,
-        renderTile,
-        signal,
-        onTileUnload: t => { t.content?.texture?.destroy(); t.content?.mask?.destroy(); },
-      }),
+    pool,
+    getTileData,
+    renderTile,
+    onTileUnload: t => { t.content?.texture?.destroy(); t.content?.mask?.destroy(); },
   });
 }
 
@@ -170,11 +154,8 @@ function pcTiles(yr) {
   return `${PC}/mosaic/${PC_SEARCH[yr]}/tiles/WebMercatorQuad/{z}/{x}/{y}@2x?${PC_RENDER}`;
 }
 
-// Only the active year is rendered; its GeoTIFF handles (in `tiffs`) and source list
-// stay cached, so switching back rebuilds the GPU textures without refetching.
-const sourcesByYear = new Map();
 const pcYears = new Set();    // PC raster layers added, one per year
-async function refresh() {
+function refresh() {
   if (source === "pc" && !pcYears.has(year)) {
     pcYears.add(year);
     map.addSource(`pc-${year}`, { type: "raster", tiles: [pcTiles(year)], tileSize: 512, minzoom: 2,
@@ -184,16 +165,12 @@ async function refresh() {
   for (const y of pcYears)
     map.setLayoutProperty(`pc-${y}`, "visibility", source === "pc" && y === year ? "visible" : "none");
 
-  if (source === "ours" && !sourcesByYear.has(year))
-    sourcesByYear.set(year, await loadSources(year));
-  overlay.setProps({ layers: source === "ours" && sourcesByYear.has(year)
-    ? [buildLayer(year, sourcesByYear.get(year))] : [] });
+  overlay.setProps({ layers: source === "ours" ? [buildLayer(year)] : [] });
 }
 
 const sourceSel = document.getElementById("source");
 const yearSel = document.getElementById("year");
 const yearLbl = document.getElementById("yearlbl");
-const playBtn = document.getElementById("play");
 
 let years = YEARS;
 function fillYears() {
@@ -210,13 +187,6 @@ function setYear(i) {
   yearLbl.textContent = year;
   refresh();
 }
-
-let timer = null;
-playBtn.onclick = () => {
-  if (timer) { clearInterval(timer); timer = null; playBtn.textContent = "▶"; return; }
-  playBtn.textContent = "⏸";
-  timer = setInterval(() => setYear((years.indexOf(year) + 1) % years.length), 1200);
-};
 
 sourceSel.onchange = e => { source = e.target.value; fillYears(); refresh(); };
 yearSel.oninput = e => setYear(+e.target.value);
